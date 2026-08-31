@@ -1,6 +1,6 @@
 # dsh-codex 与 dsh-tui 兼容性调查
 
-> **维护警告（Doodead）：** 我不懂中文，没法持续更新中文文档。本文档可能已经过时，请以英文版本为准。
+**维护警告（Doodead）：** 我不懂中文，没法持续更新中文文档。本文档可能已经过时，请以英文版本为准。
 
 > 2026-08-16 实施状态：本地工作树已完成 link profile 安装、带子命令补全的 `/codex`、`agentDefaultModel` 启动路由、Ctrl+V／`@image` 持久图片输入、`imagegen` 通用结果卡片和完整工具错误文本。终端内联像素预览仍留给 dsh-tui 的通用 attachment renderer；当前卡片显示生成参数、结果信息与工作区输出路径。
 
