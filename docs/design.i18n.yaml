@@ -1,4 +1,5 @@
-# Bilingual-pair consistency record for the design document. Re-record with:
+# Historical bilingual-pair consistency record. English is authoritative;
+# design.zh.md now carries a warning that it may lag. Re-record after translation review:
 #   git hash-object docs/design.md docs/design.zh.md
 design.md: fda85ddc9d4f62e904e1d03ebc80eb44c1497fe8
 design.zh.md: d062cc290ddcce33da98e70aef0a24baf4d9e0af

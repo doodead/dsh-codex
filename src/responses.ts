@@ -17,6 +17,7 @@ import {
   convertResponsesMessages,
   convertResponsesTools,
 } from '@earendil-works/pi-ai/api/openai-responses-shared'
+import { transformNativeWebSearchPayload } from './native-web-search.ts'
 import type { ResponseApiPreferences } from './tool-policy.ts'
 
 /** Responses endpoint used by the official Codex client, including V2 compaction. */
@@ -356,9 +357,16 @@ export class OpenAICodexResponseRuntime {
     const compaction = (this.compactionCalls.get(key) ?? 0) > 0
     const preferences = this.preferences()
     if (compaction && preferences.useNativeCompaction) {
-      return this.nativeCompactionStream(provider, model, context, options)
+      return this.nativeCompactionStream(provider, model, context, options, preferences)
     }
-    return this.standardStream(provider, model, context, options, !compaction && preferences.useWebSocketContextReuse)
+    return this.standardStream(
+      provider,
+      model,
+      context,
+      options,
+      !compaction && preferences.useWebSocketContextReuse,
+      preferences,
+    )
   }
 
   private standardStream(
@@ -367,6 +375,7 @@ export class OpenAICodexResponseRuntime {
     context: PiContext,
     options: SimpleStreamOptions | undefined,
     reuseWebSocketContext: boolean,
+    preferences: ResponseApiPreferences,
   ): AssistantMessageEventStream {
     return provider.streamSimple(model, context, {
       ...options,
@@ -374,10 +383,17 @@ export class OpenAICodexResponseRuntime {
       onPayload: async (payload, payloadModel) => {
         if (!isRecord(payload)) throw new Error('OpenAI Codex generated a non-object Responses payload')
         const input = Array.isArray(payload['input']) ? expandNativeCompactionMarkers(payload['input']) : payload['input']
-        const transformed = { ...payload, input }
-        return options?.onPayload === undefined
-          ? transformed
-          : await options.onPayload(transformed, payloadModel)
+        let transformed: unknown = { ...payload, input }
+        if (options?.onPayload !== undefined) {
+          transformed = await options.onPayload(transformed, payloadModel) ?? transformed
+        }
+        return transformNativeWebSearchPayload(transformed, {
+          harnessTools: context.tools,
+          enabled: preferences.nativeWebSearch,
+          mode: preferences.nativeWebSearchMode,
+          contextSize: preferences.nativeWebSearchContextSize,
+          alwaysAvailable: preferences.nativeWebSearchAlwaysAvailable,
+        }) ?? transformed
       },
     })
   }
@@ -386,7 +402,8 @@ export class OpenAICodexResponseRuntime {
     provider: Provider,
     model: Model<Api>,
     context: PiContext,
-    options?: SimpleStreamOptions,
+    options: SimpleStreamOptions | undefined,
+    preferences: ResponseApiPreferences,
   ): AssistantMessageEventStream {
     const target = createAssistantMessageEventStream()
     void this.requestNativeCompaction(model, context, options).then(
@@ -397,7 +414,7 @@ export class OpenAICodexResponseRuntime {
       error => {
         const source = options?.signal?.aborted === true
           ? failedStream(model, error, options.signal)
-          : this.standardStream(provider, model, context, options, false)
+          : this.standardStream(provider, model, context, options, false, preferences)
         void (async () => { for await (const event of source) target.push(event) })()
       },
     )

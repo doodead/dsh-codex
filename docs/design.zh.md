@@ -1,5 +1,7 @@
 # 设计：OpenAI Codex 订阅组合包
 
+> **维护警告（Doodead）：** 我不懂中文，没法持续更新中文文档。本文档可能已经过时，请以英文版本为准。
+
 Status: implemented
 
 [English](design.md) | 中文

@@ -4,6 +4,7 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import type { OpenAICodexService } from '../src/service.ts'
 import * as TuiAdapter from '../src/tui.ts'
+import { DEFAULT_RESPONSE_API_PREFERENCES } from '../src/tool-policy.ts'
 
 let context: Context | undefined
 
@@ -14,7 +15,7 @@ afterEach(async () => {
 
 function fakeService(): OpenAICodexService {
   let imagePreferences = { modifyReadImage: true, shareImagegenWithOtherModels: true }
-  let responsePreferences = { useWebSocketContextReuse: false, useNativeCompaction: false }
+  let responsePreferences = { ...DEFAULT_RESPONSE_API_PREFERENCES }
   return {
     authStatus: vi.fn(async () => ({ authenticated: true, expiresAt: new Date('2026-08-17T00:00:00Z') })),
     usage: vi.fn(async () => ({
@@ -90,9 +91,22 @@ describe('UI-neutral command with optional dsh-tui completion', () => {
       descriptions: { en: 'Show the ChatGPT sign-in state', zh: '查看 ChatGPT 登录状态' },
     })
     expect(commandTree.children(['codex', 'set']).map(item => item.name)).toEqual([
-      'read-image', 'imagegen-other-models', 'websocket-context', 'native-compaction',
+      'read-image',
+      'imagegen-other-models',
+      'websocket-context',
+      'native-compaction',
+      'native-web-search',
+      'native-web-search-mode',
+      'native-web-search-context',
+      'native-web-search-always-available',
     ])
     expect(commandTree.children(['codex', 'set', 'native-compaction']).map(item => item.name)).toEqual(['on', 'off'])
+    expect(commandTree.children(['codex', 'set', 'native-web-search-mode']).map(item => item.name)).toEqual([
+      'cached', 'indexed', 'live',
+    ])
+    expect(commandTree.children(['codex', 'set', 'native-web-search-context']).map(item => item.name)).toEqual([
+      'omit', 'low', 'medium', 'high',
+    ])
     await expect(definition.handler({ rawInput: ' status' } as never)).resolves.toEqual({
       kind: 'success',
       text: 'OpenAI Codex is signed in. Access token expires 2026-08-17T00:00:00.000Z; refresh is automatic.',
@@ -110,6 +124,20 @@ describe('UI-neutral command with optional dsh-tui completion', () => {
       text: expect.stringContaining('native-compaction: on'),
     })
     expect(service.updateResponsePreferences).toHaveBeenCalledWith({ useNativeCompaction: true })
+    await expect(definition.handler({ rawInput: ' set native-web-search-mode live' } as never)).resolves.toMatchObject({
+      kind: 'success',
+      text: expect.stringContaining('native-web-search-mode: live'),
+    })
+    expect(service.updateResponsePreferences).toHaveBeenCalledWith({ nativeWebSearchMode: 'live' })
+    await expect(definition.handler({ rawInput: ' set native-web-search-context omit' } as never)).resolves.toMatchObject({
+      kind: 'success',
+      text: expect.stringContaining('native-web-search-context: omit'),
+    })
+    expect(service.updateResponsePreferences).toHaveBeenCalledWith({ nativeWebSearchContextSize: 'omit' })
+    await expect(definition.handler({ rawInput: ' set native-web-search-mode disabled' } as never)).resolves.toMatchObject({
+      kind: 'error',
+      text: expect.stringContaining('cached, indexed, or live'),
+    })
     expect(ctx.get('openAICodexTui')).toEqual({})
   })
 })

@@ -3,6 +3,7 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
+import type { NativeWebSearchContextSize, NativeWebSearchMode } from './native-web-search.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 
 /** User-controlled image-tool integration. */
@@ -15,6 +16,10 @@ export interface ImageToolPreferences {
 export interface ResponseApiPreferences {
   useWebSocketContextReuse: boolean
   useNativeCompaction: boolean
+  nativeWebSearch: boolean
+  nativeWebSearchMode: NativeWebSearchMode
+  nativeWebSearchContextSize: NativeWebSearchContextSize
+  nativeWebSearchAlwaysAvailable: boolean
 }
 
 /** One selectable model from the complete provider catalog. */
@@ -48,6 +53,10 @@ export const DEFAULT_IMAGE_TOOL_PREFERENCES: ImageToolPreferences = {
 export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
   useWebSocketContextReuse: false,
   useNativeCompaction: false,
+  nativeWebSearch: true,
+  nativeWebSearchMode: 'cached',
+  nativeWebSearchContextSize: 'omit',
+  nativeWebSearchAlwaysAvailable: false,
 }
 
 const NAMESPACE = settingsNamespace('openai-codex')
@@ -59,6 +68,10 @@ function preferenceSchema(defaultModels: readonly string[]): z<OpenAICodexPrefer
     useWebSocketContextReuse: z.boolean().default(false),
     useStatefulResponses: z.boolean().default(false),
     useNativeCompaction: z.boolean().default(false),
+    nativeWebSearch: z.boolean().default(true),
+    nativeWebSearchMode: z.union(['cached', 'indexed', 'live'] as const).default('cached'),
+    nativeWebSearchContextSize: z.union(['omit', 'low', 'medium', 'high'] as const).default('omit'),
+    nativeWebSearchAlwaysAvailable: z.boolean().default(false),
     models: z.array(z.string()).default([...defaultModels]),
   })
 }
@@ -126,6 +139,10 @@ export class ImageToolPolicy {
     return {
       useWebSocketContextReuse: this.current.useWebSocketContextReuse,
       useNativeCompaction: this.current.useNativeCompaction,
+      nativeWebSearch: this.current.nativeWebSearch,
+      nativeWebSearchMode: this.current.nativeWebSearchMode,
+      nativeWebSearchContextSize: this.current.nativeWebSearchContextSize,
+      nativeWebSearchAlwaysAvailable: this.current.nativeWebSearchAlwaysAvailable,
     }
   }
 

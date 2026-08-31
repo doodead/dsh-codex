@@ -19,6 +19,7 @@ import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
+import type { NativeWebSearchContextSize, NativeWebSearchMode } from './native-web-search.ts'
 import { FastModeRegistry } from './fast-mode.ts'
 import { assertNoOpenAICodexProviderConflict } from './doctor.ts'
 import {
@@ -40,6 +41,19 @@ export {
   ImageToolPolicy,
 } from './tool-policy.ts'
 export type { ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
+export {
+  hasHarnessWebSearch,
+  hostedNativeWebSearchTool,
+  NATIVE_WEB_SEARCH_CONTEXT_SIZES,
+  NATIVE_WEB_SEARCH_MODES,
+  transformNativeWebSearchPayload,
+} from './native-web-search.ts'
+export type {
+  HostedNativeWebSearchTool,
+  NativeWebSearchContextSize,
+  NativeWebSearchMode,
+  NativeWebSearchTransformOptions,
+} from './native-web-search.ts'
 export {
   isOpenAICodexReauthRequiredError,
   OPENAI_CODEX_REAUTH_REQUIRED_CODE,
@@ -141,6 +155,14 @@ export interface Config {
   useWebSocketContextReuse?: boolean
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean
+  /** Replace a model-visible Harness web_search function with Codex hosted search. */
+  nativeWebSearch?: boolean
+  /** Cached, indexed, or live access for Codex hosted search. */
+  nativeWebSearchMode?: NativeWebSearchMode
+  /** Hosted-search context size, or omit to use Codex's provider default. */
+  nativeWebSearchContextSize?: NativeWebSearchContextSize
+  /** Grant hosted search even when the current turn does not expose web_search. */
+  nativeWebSearchAlwaysAvailable?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -153,6 +175,10 @@ export const Config: z<Config> = z.object({
   shareImagegenWithOtherModels: z.boolean().default(true),
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  nativeWebSearch: z.boolean().default(true),
+  nativeWebSearchMode: z.union(['cached', 'indexed', 'live'] as const).default('cached'),
+  nativeWebSearchContextSize: z.union(['omit', 'low', 'medium', 'high'] as const).default('omit'),
+  nativeWebSearchAlwaysAvailable: z.boolean().default(false),
 })
 
 /**
@@ -170,6 +196,10 @@ export function apply(ctx: Context, config: Config): void {
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
+    nativeWebSearch: config.nativeWebSearch ?? true,
+    nativeWebSearchMode: config.nativeWebSearchMode ?? 'cached',
+    nativeWebSearchContextSize: config.nativeWebSearchContextSize ?? 'omit',
+    nativeWebSearchAlwaysAvailable: config.nativeWebSearchAlwaysAvailable ?? false,
   })
   const credentials = service.credentials
   const imageTools = service.policy

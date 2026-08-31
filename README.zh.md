@@ -1,5 +1,7 @@
 # dsh Codex
 
+> **维护警告（Doodead）：** 我不懂中文，没法持续更新中文文档。本文档可能已经过时，请以英文版本为准。
+
 [English](README.md) | 中文
 
 通过 OpenAI Codex 登录流程，在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 中使用 ChatGPT 订阅：无需 OpenAI Platform API Key，也无需修改 dsh 源码。

@@ -6,10 +6,17 @@ import {
   OPENAI_CODEX_RETRY_POLICY,
 } from '../src/adapter.ts'
 import { Config } from '../src/index.ts'
+import { DEFAULT_RESPONSE_API_PREFERENCES } from '../src/tool-policy.ts'
 
 describe('OpenAI Codex adapter policy', () => {
   it('distinguishes an omitted model list from an explicitly empty list', () => {
     expect(Config({}).models).toBeUndefined()
+    expect(Config({})).toMatchObject({
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'cached',
+      nativeWebSearchContextSize: 'omit',
+      nativeWebSearchAlwaysAvailable: false,
+    })
     expect(Config({ models: [] }).models).toEqual([])
   })
 
@@ -17,7 +24,7 @@ describe('OpenAI Codex adapter policy', () => {
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
       () => undefined,
-      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+      () => ({ ...DEFAULT_RESPONSE_API_PREFERENCES }),
     )
 
     expect(adapter.providerRetryPolicy(OPENAI_CODEX_PROVIDER)).toBe(OPENAI_CODEX_RETRY_POLICY)
@@ -35,7 +42,7 @@ describe('OpenAI Codex adapter policy', () => {
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
       () => undefined,
-      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+      () => ({ ...DEFAULT_RESPONSE_API_PREFERENCES }),
       undefined,
       () => ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6-terra'],
     )
@@ -53,7 +60,7 @@ describe('OpenAI Codex adapter policy', () => {
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
       () => undefined,
-      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+      () => ({ ...DEFAULT_RESPONSE_API_PREFERENCES }),
     )
 
     const models = await adapter.listModels(OPENAI_CODEX_PROVIDER)

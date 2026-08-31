@@ -6,7 +6,7 @@ English | [中文](design.zh.md)
 
 ## Scope
 
-`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, an optional `read_image` URL extension, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
+`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, native hosted and standalone Codex search, browser account settings, an optional `read_image` URL extension, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
 
 ## Authentication
 
@@ -42,7 +42,13 @@ Live settings persist two independent switches. `modifyReadImage` adds or remove
 
 ## Search and session history
 
-The bundle registers a provider for dsh's existing `web_search` tool. It uses the Codex standalone search endpoint with the same refreshable OAuth credential, maps structured text results to normalized HTTP(S) citations, and supports cached, indexed, and live modes. The endpoint is fixed so profile configuration cannot redirect the bearer token.
+Ordinary Responses calls can translate a model-visible Harness `web_search` function into the Codex hosted `web_search` tool after every earlier payload hook has run. The transform is immutable and idempotent, preserves unrelated tool order, and collapses duplicate hosted search entries. Cached mode sends `external_web_access: false`; live mode sends `external_web_access: true`; indexed mode additionally sends `indexed_web_access: true`. Context size `omit` leaves `search_context_size` absent, while low, medium, and high send it explicitly. This matches Codex behaviour.
+
+Native hosted search defaults on in cached/omit mode and by default translation occurs only when the current model-visible Harness catalog exposes `web_search`. A separate always-available option explicitly relaxes that gate and provides the capability even when the `web_search` was not provided by the harness. Turning native search off leaves the Harness function unchanged; Code Mode can therefore continue reaching the standalone tool through its `run_code` bridge.
+
+The catalog check is the only Harness authorization boundary for a translated tool. Once admitted, hosted search is sent in the same Responses request and OpenAI executes any model-selected search internally. It does not produce a separate Harness function call and therefore bypasses later Harness per-call approval and execution policy. This remains true when `nativeWebSearchAlwaysAvailable` is off; that option changes only the catalog check. Deployments that require the normal Harness approval path must set `nativeWebSearch` to `false`.
+
+The bundle also registers a provider for dsh's existing `web_search` tool. It uses the Codex standalone search endpoint with the same refreshable OAuth credential, maps structured text results to normalized HTTP(S) citations, and supports cached, indexed, and live modes. The endpoint is fixed so profile configuration cannot redirect the bearer token.
 
 Before dispatch, the provider records the exact resolved, secret-free `{ endpoint, body }` request as `web/openai-codex-search-llm-request`. This dedicated event belongs to the plugin; it is declaration-merged into `SessionEventMap` and registered with the running session vocabulary when the plugin loads. The registration remains installed for the process lifetime so hot reload cannot make an already-written session unreadable.
 

@@ -25,6 +25,10 @@ import {
 } from './trusted-origins.ts'
 import { FastModeRegistry, isFastModeSessionId } from './fast-mode.ts'
 import { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
+import {
+  NATIVE_WEB_SEARCH_CONTEXT_SIZES,
+  NATIVE_WEB_SEARCH_MODES,
+} from './native-web-search.ts'
 import type {
   ImageToolPolicy,
   ImageToolPreferences,
@@ -459,15 +463,36 @@ function imagePreferencePatch(value: Record<string, unknown>): Partial<ImageTool
 }
 
 function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPreferences> {
-  const allowed = new Set<keyof ResponseApiPreferences>(['useWebSocketContextReuse', 'useNativeCompaction'])
+  const allowed = new Set<keyof ResponseApiPreferences>([
+    'useWebSocketContextReuse',
+    'useNativeCompaction',
+    'nativeWebSearch',
+    'nativeWebSearchMode',
+    'nativeWebSearchContextSize',
+    'nativeWebSearchAlwaysAvailable',
+  ])
   if (Object.keys(value).some(key => !allowed.has(key as keyof ResponseApiPreferences))) {
     throw new TypeError('request contains an unknown Responses API setting')
   }
   const patch: Partial<ResponseApiPreferences> = {}
-  for (const key of allowed) {
+  for (const key of ['useWebSocketContextReuse', 'useNativeCompaction', 'nativeWebSearch', 'nativeWebSearchAlwaysAvailable'] as const) {
     if (value[key] === undefined) continue
     if (typeof value[key] !== 'boolean') throw new TypeError(`${key} must be a boolean`)
     patch[key] = value[key]
+  }
+  const mode = value['nativeWebSearchMode']
+  if (mode !== undefined) {
+    if (typeof mode !== 'string' || !(NATIVE_WEB_SEARCH_MODES as readonly string[]).includes(mode)) {
+      throw new TypeError('nativeWebSearchMode must be cached, indexed, or live')
+    }
+    patch.nativeWebSearchMode = mode as ResponseApiPreferences['nativeWebSearchMode']
+  }
+  const contextSize = value['nativeWebSearchContextSize']
+  if (contextSize !== undefined) {
+    if (typeof contextSize !== 'string' || !(NATIVE_WEB_SEARCH_CONTEXT_SIZES as readonly string[]).includes(contextSize)) {
+      throw new TypeError('nativeWebSearchContextSize must be omit, low, medium, or high')
+    }
+    patch.nativeWebSearchContextSize = contextSize as ResponseApiPreferences['nativeWebSearchContextSize']
   }
   return patch
 }

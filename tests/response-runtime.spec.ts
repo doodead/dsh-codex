@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
-import type { SimpleStreamOptions, Transport } from '@earendil-works/pi-ai'
+import type { Context as PiContext, SimpleStreamOptions, Transport } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OpenAICodexResponseRuntime } from '../src/responses.ts'
+import { DEFAULT_RESPONSE_API_PREFERENCES } from '../src/tool-policy.ts'
 
 function runtimeHarness(initialReuse: boolean) {
   let reuse = initialReuse
@@ -18,15 +19,15 @@ function runtimeHarness(initialReuse: boolean) {
     },
   } satisfies typeof base
   const runtime = new OpenAICodexResponseRuntime(() => ({
+    ...DEFAULT_RESPONSE_API_PREFERENCES,
     useWebSocketContextReuse: reuse,
-    useNativeCompaction: false,
   }))
   const wrapped = runtime.wrap(provider)
   const model = base.getModels().find(candidate => candidate.id === 'gpt-5.6-sol')
     ?? base.getModels()[0]
   if (model === undefined) throw new Error('Codex provider has no test model')
-  const call = (sessionId: string): void => {
-    wrapped.streamSimple(model, { messages: [] }, { sessionId })
+  const call = (sessionId: string, tools?: PiContext['tools']): void => {
+    wrapped.streamSimple(model, { messages: [], ...tools === undefined ? {} : { tools } }, { sessionId })
   }
   return {
     transports,
@@ -62,6 +63,23 @@ describe('OpenAICodexResponseRuntime transport policy', () => {
     const transformed = await harness.streamOptions[0]?.onPayload?.({ store: false, input: [] }, harness.model)
 
     expect(transformed).toEqual({ store: false, input: [] })
+  })
+
+  it('rewrites the final payload when the turn exposes web_search', async () => {
+    const harness = runtimeHarness(true)
+    harness.call('session-search', [{ name: 'web_search', description: 'Search', parameters: {} }])
+
+    const transformed = await harness.streamOptions[0]?.onPayload?.({
+      store: false,
+      input: [],
+      tools: [{ type: 'function', name: 'web_search', parameters: {} }],
+    }, harness.model)
+
+    expect(transformed).toEqual({
+      store: false,
+      input: [],
+      tools: [{ type: 'web_search', external_web_access: false }],
+    })
   })
 
   it('keeps Harness compaction calls off the conversation WebSocket chain', () => {

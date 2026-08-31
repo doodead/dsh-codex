@@ -45,10 +45,19 @@ describe('ImageToolPolicy', () => {
     expect(policy.responseApiSnapshot()).toEqual({
       useWebSocketContextReuse: false,
       useNativeCompaction: false,
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'cached',
+      nativeWebSearchContextSize: 'omit',
+      nativeWebSearchAlwaysAvailable: false,
     })
 
     await policy.update({ shareImagegenWithOtherModels: false })
-    await policy.updateResponseApi({ useNativeCompaction: true })
+    await policy.updateResponseApi({
+      useNativeCompaction: true,
+      nativeWebSearchMode: 'indexed',
+      nativeWebSearchContextSize: 'low',
+      nativeWebSearchAlwaysAvailable: true,
+    })
 
     expect(policy.snapshot()).toEqual({
       modifyReadImage: true,
@@ -57,6 +66,10 @@ describe('ImageToolPolicy', () => {
     expect(policy.responseApiSnapshot()).toEqual({
       useWebSocketContextReuse: false,
       useNativeCompaction: true,
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'indexed',
+      nativeWebSearchContextSize: 'low',
+      nativeWebSearchAlwaysAvailable: true,
     })
   })
 
@@ -84,6 +97,10 @@ describe('ImageToolPolicy', () => {
     expect(policy.responseApiSnapshot()).toEqual({
       useWebSocketContextReuse: true,
       useNativeCompaction: false,
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'cached',
+      nativeWebSearchContextSize: 'omit',
+      nativeWebSearchAlwaysAvailable: false,
     })
   })
 
@@ -140,6 +157,12 @@ describe('ImageToolPolicy', () => {
     policy.attach(ctx)
 
     expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
-    expect(policy.responseApiSnapshot().useNativeCompaction).toBe(true)
+    expect(policy.responseApiSnapshot()).toMatchObject({
+      useNativeCompaction: true,
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'cached',
+      nativeWebSearchContextSize: 'omit',
+      nativeWebSearchAlwaysAvailable: false,
+    })
   })
 })

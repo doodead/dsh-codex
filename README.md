@@ -91,7 +91,21 @@ For an eligible Codex GPT conversation, the Web composer also exposes a session-
 
 ## Search
 
-The provider connects dsh's `web_search` tool to the standalone search protocol used by Codex. It returns ordinary dsh text and HTTP(S) citations, so later turns and compaction retain the tool history.
+The provider supports two paths for dsh's `web_search` capability:
+
+- **Native hosted search** (default) replaces the model-visible function with Codex's hosted `web_search` tool in the ordinary Responses request. It defaults to `cached` mode and omits `search_context_size`, matching current Codex request defaults. The replacement happens only when the active Harness tool catalog exposes `web_search`, unless **Always make native search available** is explicitly enabled.
+- **Standalone search** remains the fallback when native hosted search is disabled or the active tool catalog hides `web_search` (for example, Code Mode). It returns ordinary dsh text and HTTP(S) citations, so later turns and compaction retain the tool history.
+
+Native hosted search has four configuration and live-settings keys:
+
+| Key | Default | Values | Effect |
+|---|---:|---|---|
+| `nativeWebSearch` | `true` | boolean | Replace an eligible Harness function with hosted search; `false` preserves the Harness function path. |
+| `nativeWebSearchMode` | `cached` | `cached`, `indexed`, `live` | Select cached-only, indexed, or live external access. |
+| `nativeWebSearchContextSize` | `omit` | `omit`, `low`, `medium`, `high` | Omit `search_context_size` or send it explicitly. |
+| `nativeWebSearchAlwaysAvailable` | `false` | boolean | Ignore the Harness `web_search` catalog gate and grant hosted search on every ordinary Codex turn. |
+
+**Hosted-execution boundary:** once admitted, native search is part of the same OpenAI Responses request. If the model invokes it, OpenAI executes the search internally; no separate Harness function call is emitted, so any later Harness per-call approval or execution policy is not consulted. This is also true when `nativeWebSearchAlwaysAvailable` is `false`: that option controls only the catalog gate. Set `nativeWebSearch: false` when the normal Harness tool-call approval path must be preserved.
 
 Configure the `llm-openai-codex` row in a profile patch:
 
@@ -113,12 +127,13 @@ Each resolved, secret-free auxiliary request is recorded before dispatch as the 
 
 ## Responses API experiments
 
-The Settings page provides two Codex-only switches. Both are off by default:
+The Settings page provides Codex-only Responses controls:
 
 - **WebSocket context reuse** keeps `store: false` and selects pi-ai's Codex WebSocket continuation transport. While the same session keeps a reusable connection and the next request is an exact extension, it sends `previous_response_id` with only the new input. History edits, compaction, Fork, connection loss, and process restarts fall back to a full request. With the switch off, ordinary turns use SSE and always send the full Harness context.
 - **Native Responses compaction** follows Codex's current V2 flow: it sends the existing history plus a `compaction_trigger` item through `codex/responses`, retains recent client messages with the returned encrypted compaction item inside the Harness checkpoint, and restores those native items on later requests. Existing checkpoints remain readable after the switch is disabled. If V2 compaction is unavailable or fails, the same call falls back to the existing Harness model summary.
+- **Native hosted web search** defaults on. Its mode is `cached`, `indexed`, or `live`; disabling the feature is the sole disabled state. Context size defaults to `omit`, which leaves `search_context_size` off the wire, or can explicitly send `low`, `medium`, or `high`. **Always make native search available** defaults off because it expands model capability beyond the active Harness tool catalog.
 
-The switches are independent. Every ordinary Codex request keeps `store: false`; the default uses SSE with the text-summary path from `dsh-compaction-basic`.
+The controls are independent. Every ordinary Codex request keeps `store: false`; the default uses SSE with the text-summary path from `dsh-compaction-basic`.
 
 ## Credentials and privacy
 

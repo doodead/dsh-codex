@@ -11,6 +11,7 @@ import {
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+  OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
   trustedRequestDecision,
@@ -169,6 +170,52 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(postResponse.observed.status).toBe(200)
     expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
     expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('validates and updates native hosted-search settings', async () => {
+    const snapshot = {
+      useWebSocketContextReuse: false,
+      useNativeCompaction: false,
+      nativeWebSearch: true,
+      nativeWebSearchMode: 'cached' as const,
+      nativeWebSearchContextSize: 'omit' as const,
+      nativeWebSearchAlwaysAvailable: false,
+    }
+    const updateResponseApi = vi.fn(async (patch: Record<string, unknown>) => ({ ...snapshot, ...patch }))
+    const preferences = {
+      responseApiSnapshot: vi.fn(() => snapshot),
+      updateResponseApi,
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH)
+    if (route === undefined) throw new Error('response settings route was not registered')
+
+    const accepted = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({
+        nativeWebSearchMode: 'live',
+        nativeWebSearchContextSize: 'high',
+        nativeWebSearchAlwaysAvailable: true,
+      }),
+    }), accepted)
+    expect(accepted.observed.status).toBe(200)
+    expect(updateResponseApi).toHaveBeenCalledWith({
+      nativeWebSearchMode: 'live',
+      nativeWebSearchContextSize: 'high',
+      nativeWebSearchAlwaysAvailable: true,
+    })
+
+    for (const body of [
+      { nativeWebSearchMode: 'disabled' },
+      { nativeWebSearchContextSize: 'default' },
+      { nativeWebSearch: 'yes' },
+      { unknown: true },
+    ]) {
+      const rejected = response()
+      await route.handler(request({ method: 'POST', body: JSON.stringify(body) }), rejected)
+      expect(rejected.observed.status).toBe(400)
+    }
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {

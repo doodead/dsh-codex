@@ -5,6 +5,11 @@ import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import {
+  NATIVE_WEB_SEARCH_CONTEXT_SIZES,
+  NATIVE_WEB_SEARCH_MODES,
+} from './native-web-search.ts'
+import type { NativeWebSearchContextSize, NativeWebSearchMode } from './native-web-search.ts'
 import type { OpenAICodexService } from './service.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -52,7 +57,10 @@ const HELP = [
   '  /codex logout',
   '  /codex usage',
   '  /codex config',
-  '  /codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>',
+  '  /codex set <setting> <value>',
+  '  boolean values: on | off',
+  '  native-web-search-mode: cached | indexed | live',
+  '  native-web-search-context: omit | low | medium | high',
 ].join('\n')
 
 function translatedNode(name: string, en: string, zh: string): TuiSubcommandNode {
@@ -73,6 +81,10 @@ const CODEX_SETTINGS: readonly TuiSubcommandNode[] = [
   translatedNode('imagegen-other-models', 'Allow other vision models to call imagegen', '允许其他视觉模型调用 imagegen'),
   translatedNode('websocket-context', 'Reuse Codex WebSocket response context', '复用 Codex WebSocket 响应上下文'),
   translatedNode('native-compaction', 'Use Codex V2 Responses compaction', '使用 Codex V2 Responses 压缩'),
+  translatedNode('native-web-search', 'Use Codex hosted web search', '使用 Codex 托管网页搜索'),
+  translatedNode('native-web-search-mode', 'Choose native web search access mode', '选择原生网页搜索访问模式'),
+  translatedNode('native-web-search-context', 'Choose native web search context size', '选择原生网页搜索上下文大小'),
+  translatedNode('native-web-search-always-available', 'Grant native search without a Harness web_search function', '即使没有 Harness web_search 函数也授予原生搜索能力'),
 ]
 
 const BOOLEAN_VALUES: readonly TuiSubcommandNode[] = [
@@ -80,11 +92,26 @@ const BOOLEAN_VALUES: readonly TuiSubcommandNode[] = [
   translatedNode('off', 'Disable this setting', '关闭此设置'),
 ]
 
+const NATIVE_WEB_SEARCH_MODE_VALUES = NATIVE_WEB_SEARCH_MODES.map(value => translatedNode(value, value, value))
+const NATIVE_WEB_SEARCH_CONTEXT_VALUES = NATIVE_WEB_SEARCH_CONTEXT_SIZES.map(value => translatedNode(value, value, value))
+
+const BOOLEAN_SETTINGS = new Set([
+  'read-image',
+  'imagegen-other-models',
+  'websocket-context',
+  'native-compaction',
+  'native-web-search',
+  'native-web-search-always-available',
+])
+
 function codexSubcommands(path: readonly string[]): readonly TuiSubcommandNode[] {
   if (path.length === 1 && path[0] === 'codex') return CODEX_ACTIONS
   if (path.length === 2 && path[0] === 'codex' && path[1] === 'set') return CODEX_SETTINGS
-  if (path.length === 3 && path[0] === 'codex' && path[1] === 'set'
-    && CODEX_SETTINGS.some(setting => setting.name === path[2])) return BOOLEAN_VALUES
+  if (path.length === 3 && path[0] === 'codex' && path[1] === 'set') {
+    if (BOOLEAN_SETTINGS.has(path[2] ?? '')) return BOOLEAN_VALUES
+    if (path[2] === 'native-web-search-mode') return NATIVE_WEB_SEARCH_MODE_VALUES
+    if (path[2] === 'native-web-search-context') return NATIVE_WEB_SEARCH_CONTEXT_VALUES
+  }
   return []
 }
 
@@ -249,22 +276,50 @@ function formatConfig(service: OpenAICodexService): string {
     `imagegen-other-models: ${image.shareImagegenWithOtherModels ? 'on' : 'off'}`,
     `websocket-context: ${responses.useWebSocketContextReuse ? 'on' : 'off'}`,
     `native-compaction: ${responses.useNativeCompaction ? 'on' : 'off'}`,
+    `native-web-search: ${responses.nativeWebSearch ? 'on' : 'off'}`,
+    `native-web-search-mode: ${responses.nativeWebSearchMode}`,
+    `native-web-search-context: ${responses.nativeWebSearchContextSize}`,
+    `native-web-search-always-available: ${responses.nativeWebSearchAlwaysAvailable ? 'on' : 'off'}`,
   ].join('\n')
 }
 
-async function updateSetting(service: OpenAICodexService, key: string, enabled: boolean): Promise<void> {
+function booleanValue(value: string): boolean {
+  if (value === 'on') return true
+  if (value === 'off') return false
+  throw new Error(`expected "on" or "off", received ${JSON.stringify(value)}`)
+}
+
+async function updateSetting(service: OpenAICodexService, key: string, value: string): Promise<void> {
   switch (key) {
     case 'read-image':
-      await service.updateImagePreferences({ modifyReadImage: enabled })
+      await service.updateImagePreferences({ modifyReadImage: booleanValue(value) })
       return
     case 'imagegen-other-models':
-      await service.updateImagePreferences({ shareImagegenWithOtherModels: enabled })
+      await service.updateImagePreferences({ shareImagegenWithOtherModels: booleanValue(value) })
       return
     case 'websocket-context':
-      await service.updateResponsePreferences({ useWebSocketContextReuse: enabled })
+      await service.updateResponsePreferences({ useWebSocketContextReuse: booleanValue(value) })
       return
     case 'native-compaction':
-      await service.updateResponsePreferences({ useNativeCompaction: enabled })
+      await service.updateResponsePreferences({ useNativeCompaction: booleanValue(value) })
+      return
+    case 'native-web-search':
+      await service.updateResponsePreferences({ nativeWebSearch: booleanValue(value) })
+      return
+    case 'native-web-search-always-available':
+      await service.updateResponsePreferences({ nativeWebSearchAlwaysAvailable: booleanValue(value) })
+      return
+    case 'native-web-search-mode':
+      if (!(NATIVE_WEB_SEARCH_MODES as readonly string[]).includes(value)) {
+        throw new Error('native-web-search-mode must be cached, indexed, or live')
+      }
+      await service.updateResponsePreferences({ nativeWebSearchMode: value as NativeWebSearchMode })
+      return
+    case 'native-web-search-context':
+      if (!(NATIVE_WEB_SEARCH_CONTEXT_SIZES as readonly string[]).includes(value)) {
+        throw new Error('native-web-search-context must be omit, low, medium, or high')
+      }
+      await service.updateResponsePreferences({ nativeWebSearchContextSize: value as NativeWebSearchContextSize })
       return
     default:
       throw new Error(`unknown setting ${JSON.stringify(key)}`)
@@ -313,8 +368,8 @@ function registerCodexCommand(ctx: Context): void {
             if (parts.length !== 1) return failure(HELP)
             return success(formatConfig(service))
           case 'set': {
-            if (parts.length !== 3 || (parts[2] !== 'on' && parts[2] !== 'off')) return failure(HELP)
-            await updateSetting(service, parts[1] as string, parts[2] === 'on')
+            if (parts.length !== 3) return failure(HELP)
+            await updateSetting(service, parts[1] as string, parts[2] as string)
             return success(formatConfig(service))
           }
           default:

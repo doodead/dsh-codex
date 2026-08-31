@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AssistantMessageEventStream, Context as PiContext, Model, Provider, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import { withOpenAICodexFastMode } from '../src/adapter.ts'
+import { OpenAICodexResponseRuntime } from '../src/responses.ts'
+import { DEFAULT_RESPONSE_API_PREFERENCES } from '../src/tool-policy.ts'
 import {
   FastModeRegistry,
   OPENAI_CODEX_FAST_MODE_MAX_SESSION_ID_LENGTH,
@@ -104,5 +106,27 @@ describe('OpenAI Codex Fast Mode adapter boundary', () => {
     const wrapped = withOpenAICodexFastMode(fixture.provider, registry)
     wrapped.streamSimple(model('other-provider'), {} as PiContext, { sessionId: 'session-a' })
     expect(fixture.streamSimple).toHaveBeenCalledWith(expect.anything(), expect.anything(), { sessionId: 'session-a' })
+  })
+
+  it('composes priority service with native hosted search', async () => {
+    const fixture = providerFixture()
+    const registry = new FastModeRegistry()
+    registry.set('session-a', true)
+    const fastProvider = withOpenAICodexFastMode(fixture.provider, registry)
+    const runtime = new OpenAICodexResponseRuntime(() => ({ ...DEFAULT_RESPONSE_API_PREFERENCES }))
+    const wrapped = runtime.wrap(fastProvider)
+
+    wrapped.streamSimple(model('openai-codex'), {
+      messages: [],
+      tools: [{ name: 'web_search', description: 'Search', parameters: {} }],
+    }, { sessionId: 'session-a' })
+    await vi.waitFor(() => {
+      expect(fixture.payloads).toContainEqual({
+        model: 'gpt-5',
+        input: [],
+        service_tier: 'priority',
+        tools: [{ type: 'web_search', external_web_access: false }],
+      })
+    })
   })
 })

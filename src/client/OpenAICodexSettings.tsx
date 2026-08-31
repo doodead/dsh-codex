@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
+import type { NativeWebSearchContextSize, NativeWebSearchMode } from '../native-web-search.ts'
 import type {
   ImageToolPreferences,
   ModelCatalogSettings,
@@ -58,6 +59,7 @@ const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borde
 const toggleRowStyle: CSSProperties = { ...rowStyle, flexWrap: 'nowrap', alignItems: 'flex-start' }
 const toggleCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 }
 const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
+const selectStyle: CSSProperties = { minWidth: 140, minHeight: 34, padding: '5px 10px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14 }
 const modelListStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }
 const modelRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minHeight: 30, fontSize: 14, color: 'var(--dsw-alias-label-primary)', cursor: 'pointer' }
 const modelIdStyle: CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
@@ -506,6 +508,65 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         <div>
           <h3 style={quotaTitleStyle}>{t('responseApi')}</h3>
           <p style={{ ...bodyStyle, marginTop: 5 }}>{t('responseApiIntro')}</p>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('nativeWebSearch')}</span>
+            <span style={bodyStyle}>{t('nativeWebSearchHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('nativeWebSearch')}
+            disabled={responseApi === undefined || responseApiBusy}
+            checked={responseApi?.nativeWebSearch ?? false}
+            onChange={checked => { void updateResponseApi({ nativeWebSearch: checked }) }}
+          />
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <label htmlFor="native-web-search-mode" style={statusStyle}>{t('nativeWebSearchMode')}</label>
+            <span style={bodyStyle}>{t('nativeWebSearchModeHint')}</span>
+          </span>
+          <select
+            id="native-web-search-mode"
+            style={selectStyle}
+            disabled={responseApi === undefined || responseApiBusy}
+            value={responseApi?.nativeWebSearchMode ?? 'cached'}
+            onChange={event => { void updateResponseApi({ nativeWebSearchMode: event.currentTarget.value as NativeWebSearchMode }) }}
+          >
+            <option value="cached">{t('nativeWebSearchModeCached')}</option>
+            <option value="indexed">{t('nativeWebSearchModeIndexed')}</option>
+            <option value="live">{t('nativeWebSearchModeLive')}</option>
+          </select>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <label htmlFor="native-web-search-context-size" style={statusStyle}>{t('nativeWebSearchContextSize')}</label>
+            <span style={bodyStyle}>{t('nativeWebSearchContextSizeHint')}</span>
+          </span>
+          <select
+            id="native-web-search-context-size"
+            style={selectStyle}
+            disabled={responseApi === undefined || responseApiBusy}
+            value={responseApi?.nativeWebSearchContextSize ?? 'omit'}
+            onChange={event => { void updateResponseApi({ nativeWebSearchContextSize: event.currentTarget.value as NativeWebSearchContextSize }) }}
+          >
+            <option value="omit">{t('nativeWebSearchContextSizeOmit')}</option>
+            <option value="low">{t('nativeWebSearchContextSizeLow')}</option>
+            <option value="medium">{t('nativeWebSearchContextSizeMedium')}</option>
+            <option value="high">{t('nativeWebSearchContextSizeHigh')}</option>
+          </select>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('nativeWebSearchAlwaysAvailable')}</span>
+            <span style={bodyStyle}>{t('nativeWebSearchAlwaysAvailableHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('nativeWebSearchAlwaysAvailable')}
+            disabled={responseApi === undefined || responseApiBusy}
+            checked={responseApi?.nativeWebSearchAlwaysAvailable ?? false}
+            onChange={checked => { void updateResponseApi({ nativeWebSearchAlwaysAvailable: checked }) }}
+          />
         </div>
         <div style={toggleRowStyle}>
           <span style={toggleCopyStyle}>
