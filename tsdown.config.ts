@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-codex'
+const PLUGIN_ID = 'dsh-codex-experiment'
 const PACKAGE_VERSION = (JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string }).version

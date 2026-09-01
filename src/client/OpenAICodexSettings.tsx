@@ -268,7 +268,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogSettings | undefined>()
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false)
   const [modelCatalogError, setModelCatalogError] = useState<string | undefined>()
-  const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`
+  const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex-experiment trust-origin ${window.location.origin}`
 
   const refresh = useCallback(async () => {
     try {

@@ -37,7 +37,7 @@ afterEach(async () => {
   root = undefined
 })
 
-describe('dsh-codex CLI', () => {
+describe('dsh-codex-experiment CLI', () => {
   it('trusts, lists, and untrusts exact origins through the server CLI', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-codex-bin-'))
     vi.stubEnv('DSH_HOME', root)
@@ -68,9 +68,9 @@ describe('dsh-codex CLI', () => {
       return true
     })
     await expect(run(['--help'])).resolves.toBe(0)
-    expect(output).toContain('Usage: dsh-openai-codex <doctor|login|logout|status>')
-    expect(output).toContain('dsh-openai-codex trust-origin <origin>')
-    expect(output).toContain('dsh-openai-codex trusted-origins [--json]')
+    expect(output).toContain('Usage: dsh-openai-codex-experiment <doctor|login|logout|status>')
+    expect(output).toContain('dsh-openai-codex-experiment trust-origin <origin>')
+    expect(output).toContain('dsh-openai-codex-experiment trusted-origins [--json]')
     expect(output).toContain('doctor         inspect secret-free')
   })
 
@@ -81,14 +81,14 @@ describe('dsh-codex CLI', () => {
       return true
     })
     await expect(run(['doctor', '--device-code'])).resolves.toBe(1)
-    expect(output).toMatch(/^dsh-openai-codex:/)
+    expect(output).toMatch(/^dsh-openai-codex-experiment:/)
     expect(output).not.toContain('dsh-codex-connect:')
   })
 
   it('emits one secret-free JSON document for doctor', async () => {
     const credentialPath = '/Users/fixture/.dsh/openai-codex-auth.json'
     mocked.diagnose.mockResolvedValue({
-      package: 'dsh-codex',
+      package: 'dsh-codex-experiment',
       version: '0.1.0-alpha.4.8',
       node: 'v22.19.0',
       credentialFile: { path: credentialPath, state: 'owner-only', mode: '600' },
@@ -122,7 +122,7 @@ describe('dsh-codex CLI', () => {
     const parsed: unknown = JSON.parse(output)
     expect(parsed).toMatchObject({
       schemaVersion: 1,
-      package: 'dsh-codex',
+      package: 'dsh-codex-experiment',
       version: '0.1.0-alpha.4.8',
       node: 'v22.19.0',
       credentialFile: { state: 'owner-only', mode: '600' },
@@ -152,7 +152,7 @@ describe('dsh-codex CLI', () => {
 
   it('returns exit 1 and a JSON compatibility status for an incompatible doctor report', async () => {
     mocked.diagnose.mockResolvedValue({
-      package: 'dsh-codex',
+      package: 'dsh-codex-experiment',
       version: '0.1.0-alpha.4.8',
       node: 'v22.19.0',
       credentialFile: { path: '/Users/fixture/.dsh/openai-codex-auth.json', state: 'missing' },
@@ -207,7 +207,7 @@ describe('dsh-codex CLI', () => {
     const parsed: unknown = JSON.parse(output)
     expect(parsed).toMatchObject({
       schemaVersion: 1,
-      package: 'dsh-codex',
+      package: 'dsh-codex-experiment',
       status: expectedStatus,
     })
     expect(parsed).not.toHaveProperty('expiresAt')
@@ -238,6 +238,6 @@ describe('dsh-codex CLI', () => {
     })
 
     await expect(run(argv)).resolves.toBe(1)
-    expect(output).toMatch(/^dsh-openai-codex: invalid options for /)
+    expect(output).toMatch(/^dsh-openai-codex-experiment: invalid options for /)
   })
 })

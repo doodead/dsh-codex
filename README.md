@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) through OpenAI's Codex sign-in flow—no OpenAI Platform API key required and no dsh source patch required.
 
-`dsh-codex` is an independent dsh bundle. It adds:
+`dsh-codex-experiment` is an independent dsh bundle. It adds:
 
 - ChatGPT OAuth from the dsh Settings panel or a standalone CLI, with automatic token refresh
 - the Codex GPT catalog, including vision-capable models when the account offers them
@@ -19,33 +19,33 @@ ChatGPT subscription authentication and usage-based OpenAI API access are differ
 
 ## Install
 
-Install the prebuilt bundle from npm into the selected dsh profile:
+Install the built local checkout into the selected dsh profile:
 
 ```sh
-dsh plugin --profile web add dsh-codex
+dsh plugin --profile web add link:/absolute/path/to/dsh-codex
 dsh web
 ```
 
-From a DeepSeek Harness source checkout, use `pnpm dsh plugin --profile web add dsh-codex`. A local plugin checkout can still be installed with `link:/absolute/path/to/dsh-codex` for development.
+From a DeepSeek Harness source checkout, use `pnpm dsh plugin --profile web add link:/absolute/path/to/dsh-codex`. DSH records the installed bundle as `dsh-codex-experiment`, so it can coexist with an installed but disabled `dsh-codex` package.
 
 Open **Settings → OpenAI Codex → Sign in with ChatGPT**. The plugin opens OpenAI's authorization page and completes the localhost callback. The account page shows live Codex quota bars and exact remaining percentages; exact credit balances or workspace limits appear only when the account API supplies them.
 
-Loopback Web pages are trusted automatically. If dsh runs on another machine, the account page shows the exact origin command that must be approved on the dsh host, for example `dsh plugin --profile web exec dsh-openai-codex trust-origin http://host:port`. The allowlist is exact-origin, stored separately from OAuth credentials, and can be inspected or revoked with `trusted-origins` and `untrust-origin`.
+Loopback Web pages are trusted automatically. If dsh runs on another machine, the account page shows the exact origin command that must be approved on the dsh host, for example `dsh plugin --profile web exec dsh-openai-codex-experiment trust-origin http://host:port`. The allowlist is exact-origin, stored separately from OAuth credentials, and can be inspected or revoked with `trusted-origins` and `untrust-origin`.
 
 The CLI remains available for terminal and headless installations:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login
-dsh plugin --profile web exec dsh-openai-codex login --device-code
-dsh plugin --profile web exec dsh-openai-codex status
-dsh plugin --profile web exec dsh-openai-codex doctor --json
-dsh plugin --profile web exec dsh-openai-codex logout
+dsh plugin --profile web exec dsh-openai-codex-experiment login
+dsh plugin --profile web exec dsh-openai-codex-experiment login --device-code
+dsh plugin --profile web exec dsh-openai-codex-experiment status
+dsh plugin --profile web exec dsh-openai-codex-experiment doctor --json
+dsh plugin --profile web exec dsh-openai-codex-experiment logout
 ```
 
 For `dsh-tui`, install the bundle into the same profile:
 
 ```sh
-dsh plugin --profile dsh-tui add dsh-codex
+dsh plugin --profile dsh-tui add link:/absolute/path/to/dsh-codex
 ```
 
 After restarting the TUI, `/model` lists the `openai-codex` catalog. With no explicit route or saved selection, the TUI adopts the bundle's `gpt-5.6-sol` default. Use `/codex status|login|logout|usage|config` for the account and live settings; the four boolean settings can be changed with `/codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>`. Browser login shares the same dsh credential file used by the Web profile.
@@ -148,7 +148,7 @@ Keeping the stores separate prevents two clients from racing the same rotating r
 
 ## Compatibility notes
 
-- This branch targets the DSH `0.1.0-rc.7` plugin surfaces and `@earendil-works/pi-ai` `0.82.1`. The adapter migrates the earlier pi-ai replay envelope while reading history so existing reasoning/tool metadata remains usable after the rc.7 upgrade.
+- This branch is compiled and tested against DSH `0.1.1-rc.2`, retains explicit compatibility with the `0.1.0-rc.7` plugin surfaces, and pins `@earendil-works/pi-ai` `0.82.1`. The adapter migrates the earlier pi-ai replay envelope while reading history so existing reasoning/tool metadata remains usable across those DSH releases.
 - The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.

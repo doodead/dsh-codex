@@ -94,10 +94,10 @@ async function answerPrompt(
 /** Print the standalone command help. */
 function printHelp(): void {
   process.stdout.write([
-    'Usage: dsh-openai-codex <doctor|login|logout|status> [--device-code|--json]',
-    '       dsh-openai-codex trust-origin <origin>',
-    '       dsh-openai-codex trusted-origins [--json]',
-    '       dsh-openai-codex untrust-origin <origin>',
+    'Usage: dsh-openai-codex-experiment <doctor|login|logout|status> [--device-code|--json]',
+    '       dsh-openai-codex-experiment trust-origin <origin>',
+    '       dsh-openai-codex-experiment trusted-origins [--json]',
+    '       dsh-openai-codex-experiment untrust-origin <origin>',
     '',
     '  doctor         inspect secret-free runtime and OAuth file metadata',
     '  login          sign in with a separate ChatGPT OAuth session',
@@ -152,7 +152,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   const [rawAction, ...flags] = argv
   const actions: readonly Action[] = ['doctor', 'login', 'logout', 'status', 'trust-origin', 'trusted-origins', 'untrust-origin']
   if (!actions.includes(rawAction as Action)) {
-    process.stderr.write(`dsh-openai-codex: expected doctor, login, logout, status, trust-origin, trusted-origins, or untrust-origin; got ${JSON.stringify(rawAction)}\n`)
+    process.stderr.write(`dsh-openai-codex-experiment: expected doctor, login, logout, status, trust-origin, trusted-origins, or untrust-origin; got ${JSON.stringify(rawAction)}\n`)
     return 1
   }
   const action = rawAction as Action
@@ -165,7 +165,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     || (deviceCode && action !== 'login')
     || (jsonOutput && (action === 'login' || action === 'logout' || deviceCode))
     || ((action === 'trust-origin' || action === 'untrust-origin') && (originArgument === undefined || optionFlags.length !== 0))) {
-    process.stderr.write(`dsh-openai-codex: invalid options for ${action}: ${flags.join(' ')}\n`)
+    process.stderr.write(`dsh-openai-codex-experiment: invalid options for ${action}: ${flags.join(' ')}\n`)
     return 1
   }
   try {
@@ -194,7 +194,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         if (jsonOutput) {
           printJson({
             schemaVersion: JSON_SCHEMA_VERSION,
-            package: 'dsh-codex',
+            package: 'dsh-codex-experiment',
             version: CODEX_CONNECT_VERSION,
             status: status.authenticated ? 'signed-in' : 'signed-out',
           })
@@ -255,7 +255,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       }
     }
   } catch (error: unknown) {
-    process.stderr.write(`dsh-openai-codex: ${action} failed: ${safeMessage(error)}\n`)
+    process.stderr.write(`dsh-openai-codex-experiment: ${action} failed: ${safeMessage(error)}\n`)
     return 1
   }
 }

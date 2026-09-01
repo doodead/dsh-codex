@@ -1,6 +1,6 @@
 /**
  * OpenAI Codex standalone web search over the dsh web provider seam.
- * @module dsh-codex/search
+ * @module dsh-codex-experiment/search
  */
 
 import { createModels } from '@earendil-works/pi-ai'

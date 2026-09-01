@@ -1,6 +1,6 @@
 /**
  * Owner-only persistent OAuth credential storage for the OpenAI Codex bundle.
- * @module dsh-codex/store
+ * @module dsh-codex-experiment/store
  */
 
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'

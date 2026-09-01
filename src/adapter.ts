@@ -1,6 +1,6 @@
 /** OpenAI Codex adapter assembled from public dsh-llm-pi-ai extension points. */
 
-import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
+import { createModels, defaultProviderAuthContext, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import type {
   Api, Context as PiContext, Model, Models, ModelThinkingLevel, MutableModels,
   Provider, SimpleStreamOptions,
@@ -32,6 +32,12 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+// Match dsh-llm-pi-ai's rc.2 request-image defaults while keeping the profile
+// object loadable by the older rc.7 adapter, which ignores these extra fields.
+const OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+const OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
+const OPENAI_CODEX_REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -183,6 +189,20 @@ class OpenAICodexAdapter extends PiAiAdapter {
     return models.filter(model => visible.has(model.id))
   }
 
+  /**
+   * Keep DSH's prepared-call path on this adapter's structured Codex stream.
+   * Newer dsh-llm-pi-ai releases bind their own snapshot stream directly from
+   * prepareCall(), which would otherwise bypass this subclass override.
+   * This route's profile and provider are immutable for the adapter lifetime.
+   */
+  override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+    const prepared = await super.prepareCall(provider, model, signal)
+    return {
+      model: prepared.model,
+      stream: (options: GenerateOptions) => this.stream(options),
+    }
+  }
+
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const release = options.purpose === 'compaction'
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
@@ -190,7 +210,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
     try {
       const migrated = migrateReplayHistory(options)
       if (migrated.stop !== undefined) {
-        throw new LlmError('dsh-codex does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
+        throw new LlmError('dsh-codex-experiment does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
       }
       const model = this.models.getModel(migrated.provider, migrated.model)
       if (model === undefined) {
@@ -282,6 +302,9 @@ export function createOpenAICodexAdapter(
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+    maxRequestImageBytes: OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES,
+    requestImagePixelBudget: OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
+    requestImageMaxBytes: OPENAI_CODEX_REQUEST_IMAGE_MAX_BYTES,
     retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
@@ -291,6 +314,7 @@ export function createOpenAICodexAdapter(
   return new OpenAICodexAdapter({
     profiles: () => profiles,
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
+    auth: { credentials, authContext: defaultProviderAuthContext() },
     resolveAttachments,
   }, responses, models, profiles.get(OPENAI_CODEX_PROVIDER)?.piProvider ?? provider, resolveAttachments, visibleModelIds)
 }

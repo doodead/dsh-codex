@@ -29,7 +29,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Stable browser-plugin name. */
-export const name = 'dsh-codex-client'
+export const name = 'dsh-codex-experiment-client'
 /** Client services required by the settings contribution. */
 export const inject = ['slots', 'locale', 'sessions']
 

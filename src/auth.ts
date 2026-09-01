@@ -1,6 +1,6 @@
 /**
  * OpenAI Codex OAuth orchestration shared by the plugin and standalone launcher.
- * @module dsh-codex/auth
+ * @module dsh-codex-experiment/auth
  */
 
 import { createModels } from '@earendil-works/pi-ai'

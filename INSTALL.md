@@ -4,11 +4,11 @@ This is the complete installation procedure for Codex, Claude Code, and other au
 
 ## Objective
 
-Install the public `dsh-codex` bundle into the requested DeepSeek Harness profile, enable its model and search routes, preserve unrelated user configuration, and verify non-secret login state.
+Install the local `dsh-codex-experiment` bundle into the requested DeepSeek Harness profile, enable its model and search routes, preserve unrelated user configuration, and verify non-secret login state.
 
 ## Defaults
 
-- **Package:** install `dsh-codex` from the configured npm registry. Use a local checkout only when the user explicitly supplies one for development.
+- **Package:** build and install the supplied local checkout. DSH records it as `dsh-codex-experiment`, independently of an installed `dsh-codex` package.
 - **Profile:** use the user-named profile; otherwise use `web`.
 - **Launcher:** prefer an installed `dsh`. From a DeepSeek Harness source checkout, run commands in that checkout and replace `dsh` with `pnpm dsh`.
 - **Search mode:** use `live` unless the user requests `cached` or `indexed`.
@@ -34,22 +34,22 @@ Run `dsh --version` or `dsh --help`. From a source checkout, run `pnpm dsh --ver
 For the default Web profile:
 
 ```sh
-dsh plugin --profile web add dsh-codex
+dsh plugin --profile web add link:/absolute/path/to/dsh-codex
 ```
 
 From a Harness source checkout:
 
 ```sh
-pnpm dsh plugin --profile web add dsh-codex
+pnpm dsh plugin --profile web add link:/absolute/path/to/dsh-codex
 ```
 
-If the user explicitly supplied a local checkout, first require `package.json`, `cordis.patch.yml`, `lib/index.js`, `lib/client.js`, and `lib/bin.js`, and require `package.json.name` to equal `dsh-codex`. Then install its normalized absolute path, using forward slashes on Windows:
+First require `package.json`, `cordis.patch.yml`, `lib/index.js`, `lib/client.js`, and `lib/bin.js`, and require `package.json.name` to equal `dsh-codex-experiment`. Then install its normalized absolute path, using forward slashes on Windows:
 
 ```sh
 dsh plugin --profile web add link:E:/absolute/path/to/dsh-codex
 ```
 
-Do not run a build when committed `lib/` artifacts are present. The install command is idempotent and must leave `dsh-codex` in the profile dependency map and `dsh.profile.bundles` exactly once.
+Do not run a build when current `lib/` artifacts are present. The install command is idempotent and must leave `dsh-codex-experiment` in the profile dependency map and `dsh.profile.bundles` exactly once.
 
 ### 3. Configure search without replacing user settings
 
@@ -75,7 +75,7 @@ dsh --profile web --dump-config
 
 Require all of these facts:
 
-- `llm-openai-codex` loads `dsh-codex`;
+- `llm-openai-codex` loads `dsh-codex-experiment`;
 - `agent-default-model` selects provider `openai-codex` and model `gpt-5.6-sol`, unless a later user setting overrides it;
 - the `web` row selects `searchProvider: openai-codex`;
 - `llm-openai-codex.config.searchMode` equals the selected mode.
@@ -87,19 +87,19 @@ Stop and report the exact diagnostic if composition fails. Do not start OAuth wh
 Check non-secret status:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex status
+dsh plugin --profile web exec dsh-openai-codex-experiment status
 ```
 
 If it reports `signed in`, do not start another login. If signed out and an interactive terminal is available, run:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login
+dsh plugin --profile web exec dsh-openai-codex-experiment login
 ```
 
 The command opens OpenAI's page and waits for its localhost callback. Tell the user to approve the page and keep waiting for completion. Never ask the user to paste a token. If the host cannot open a browser, use:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login --device-code
+dsh plugin --profile web exec dsh-openai-codex-experiment login --device-code
 ```
 
 For a local Web profile, the equivalent path is **Settings → OpenAI Codex → Sign in with ChatGPT**. Do not require both GUI and CLI login. After approval, rerun `status` and require `signed in`.
@@ -109,7 +109,7 @@ For a local Web profile, the equivalent path is **Settings → OpenAI Codex → 
 For the `web` profile, start `dsh web` if the user wants the application running. Require:
 
 - the root page loads;
-- its boot manifest contains `dsh-codex` and the plugin `client.js` URL;
+- its boot manifest contains `dsh-codex-experiment` and the plugin `client.js` URL;
 - `GET /plugins/dsh-openai-codex/auth/status` returns JSON without credentials;
 - Settings contains an **OpenAI Codex** section.
 
@@ -120,7 +120,7 @@ Do not call the login endpoint as a health check because it starts OAuth. The We
 Report only:
 
 - installed profile;
-- installed `dsh-codex` version or local checkout path;
+- installed `dsh-codex-experiment` version or local checkout path;
 - selected search mode;
 - signed-in or signed-out state;
 - whether the Web client entry was detected.
@@ -129,8 +129,8 @@ Do not report OAuth URLs, authorization codes, token timestamps, account ids, or
 
 ## Failure handling
 
-- **Package not found:** confirm the registry is `https://registry.npmjs.org/` and retry the exact package name `dsh-codex`.
-- **Executable not found:** run `dsh plugin --profile <profile> why dsh-codex`, then repeat the add command.
+- **Package not found:** verify the local `link:` path and confirm its `package.json` name is `dsh-codex-experiment`.
+- **Executable not found:** run `dsh plugin --profile <profile> why dsh-codex-experiment`, then repeat the add command.
 - **Client entry missing:** confirm the installed package contains `lib/client.js`, restart dsh, and repeat composition validation.
 - **Duplicate provider:** remove only a manually configured `llm-pi-ai.providers.openai-codex` route.
 - **401/403 after login:** run the dedicated login again; do not copy Codex CLI credentials.
@@ -143,7 +143,7 @@ Do not report OAuth URLs, authorization codes, token timestamps, account ids, or
 ## Updating
 
 ```sh
-dsh plugin --profile web update dsh-codex
+dsh plugin --profile web update dsh-codex-experiment
 ```
 
 Restart dsh and repeat composition, login-status, and Web verification. A local `link:` installation follows its checkout and is reconciled by repeating the local add command instead.
@@ -153,11 +153,11 @@ Restart dsh and repeat composition, login-status, and Web verification. A local 
 Only when explicitly requested:
 
 ```sh
-dsh plugin --profile web remove dsh-codex
+dsh plugin --profile web remove dsh-codex-experiment
 ```
 
 Remove only the `llm-openai-codex` row from the profile patch. Credential deletion is separate and requires explicit authorization:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex logout
+dsh plugin --profile web exec dsh-openai-codex-experiment logout
 ```

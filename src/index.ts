@@ -1,7 +1,7 @@
 /**
  * Optional OpenAI Codex subscription bundle with ChatGPT OAuth, Codex models,
  * standalone search, browser settings, and vision-aware image input.
- * @module dsh-codex
+ * @module dsh-codex-experiment
  */
 
 import type { Context } from '@deepseek-ai/cordis'

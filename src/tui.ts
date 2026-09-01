@@ -47,7 +47,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export const name = 'dsh-codex-tui'
+export const name = 'dsh-codex-experiment-tui'
 export const inject = ['openAICodex']
 
 const HELP = [

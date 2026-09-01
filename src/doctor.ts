@@ -25,7 +25,7 @@ export interface OpenAICodexDiagnosticOptions {
 }
 
 export interface OpenAICodexDiagnosticReport {
-  package: 'dsh-codex'
+  package: 'dsh-codex-experiment'
   version: string
   node: string
   credentialFile: {
@@ -47,7 +47,7 @@ export interface OpenAICodexDiagnosticReport {
 
 /** Actionable message for legacy/manual `openai-codex` adapter collisions. */
 export function openAICodexConflictMessage(): string {
-  return 'dsh-codex cannot register provider "openai-codex" because another adapter already owns it. '
+  return 'dsh-codex-experiment cannot register provider "openai-codex" because another adapter already owns it. '
     + 'Remove or disable the duplicate bundle or manual openai-codex provider row, then restart Harness.'
 }
 
@@ -87,7 +87,7 @@ export async function diagnoseOpenAICodex(
   const hints: string[] = []
   if (state === 'missing') hints.push('Sign in only when you are ready; installation does not start OAuth.')
   if (state === 'permissions-too-broad') hints.push(`Restrict the OAuth file to its owner before use (current mode ${mode}).`)
-  if (state === 'not-a-regular-file') hints.push('Replace the OAuth path with an owner-only regular file created by dsh-codex login.')
+  if (state === 'not-a-regular-file') hints.push('Replace the OAuth path with an owner-only regular file created by dsh-openai-codex-experiment login.')
   if (state === 'unreadable-metadata') hints.push('Harness could not inspect the OAuth file metadata; check the parent directory and file ownership.')
   if (providerConflict) hints.push(openAICodexConflictMessage())
   if (!providerConflict) hints.push('If Harness reports a duplicate openai-codex adapter, remove the legacy bundle or manual provider row.')
@@ -98,7 +98,7 @@ export async function diagnoseOpenAICodex(
   }
 
   return {
-    package: 'dsh-codex',
+    package: 'dsh-codex-experiment',
     version: CODEX_CONNECT_VERSION,
     node: process.version,
     credentialFile: { path, state, ...mode === undefined ? {} : { mode } },
