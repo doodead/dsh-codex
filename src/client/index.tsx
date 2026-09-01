@@ -19,6 +19,7 @@ import { OpenAICodexQuotaIndicator } from './OpenAICodexQuotaIndicator.tsx'
 import type { OpenAICodexQuotaIndicatorInjected } from './OpenAICodexQuotaIndicator.tsx'
 import { en, zh } from './locales.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
+import { registerCodexWebSearchNode } from './CodexWebSearchNode.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -36,6 +37,9 @@ export const inject = ['slots', 'locale', 'sessions']
 export function apply(ctx: ClientContext): void {
   const namespace = 'settings.openai-codex'
   ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-openai-codex: settings copy')
+  ctx.inject(['conversationEvents'], (scope: ClientContext) => {
+    registerCodexWebSearchNode(scope, namespace)
+  })
   const t = ctx.locale.bind(namespace) as OpenAICodexSettingsInjected['t']
   const imageUrls = new Map<string, Promise<string>>()
   const createdUrls = new Set<string>()

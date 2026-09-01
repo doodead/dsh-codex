@@ -65,6 +65,7 @@ describe('Codex hosted web search payload transformation', () => {
       { type: 'web_search', external_web_access: false },
       { type: 'function', name: 'pwsh', parameters: {} },
     ])
+    expect(once?.['include']).toEqual(['web_search_call.action.sources'])
     expect(payload.tools).toHaveLength(5)
   })
 

@@ -18,6 +18,7 @@ import {
   convertResponsesTools,
 } from '@earendil-works/pi-ai/api/openai-responses-shared'
 import { transformNativeWebSearchPayload } from './native-web-search.ts'
+import { expandCodexReplayMarkers } from './structured-search.ts'
 import type { ResponseApiPreferences } from './tool-policy.ts'
 
 /** Responses endpoint used by the official Codex client, including V2 compaction. */
@@ -382,7 +383,9 @@ export class OpenAICodexResponseRuntime {
       transport: reuseWebSocketContext ? 'websocket-cached' : 'sse',
       onPayload: async (payload, payloadModel) => {
         if (!isRecord(payload)) throw new Error('OpenAI Codex generated a non-object Responses payload')
-        const input = Array.isArray(payload['input']) ? expandNativeCompactionMarkers(payload['input']) : payload['input']
+        const input = Array.isArray(payload['input'])
+          ? expandCodexReplayMarkers(expandNativeCompactionMarkers(payload['input']))
+          : payload['input']
         let transformed: unknown = { ...payload, input }
         if (options?.onPayload !== undefined) {
           transformed = await options.onPayload(transformed, payloadModel) ?? transformed
@@ -429,12 +432,12 @@ export class OpenAICodexResponseRuntime {
     const access = options?.apiKey
     if (access === undefined || access.length === 0) throw new Error('OpenAI Codex compact request has no OAuth token')
     const messages = context.messages.length === 0 ? [] : context.messages.slice(0, -1)
-    const input = expandNativeCompactionMarkers(convertResponsesMessages(
+    const input = expandCodexReplayMarkers(expandNativeCompactionMarkers(convertResponsesMessages(
       model,
       { ...context, messages },
       CODEX_TOOL_CALL_PROVIDERS,
       { includeSystemPrompt: false },
-    ))
+    )))
     const compat = model.compat as { supportsStrictMode?: boolean; supportsOpenAIGrammarTools?: boolean } | undefined
     const supportsStrictMode = compat?.supportsStrictMode ?? true
     const supportsOpenAIGrammarTools = compat?.supportsOpenAIGrammarTools ?? false

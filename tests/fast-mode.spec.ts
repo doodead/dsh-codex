@@ -124,6 +124,7 @@ describe('OpenAI Codex Fast Mode adapter boundary', () => {
       expect(fixture.payloads).toContainEqual({
         model: 'gpt-5',
         input: [],
+        include: ['web_search_call.action.sources'],
         service_tier: 'priority',
         tools: [{ type: 'web_search', external_web_access: false }],
       })

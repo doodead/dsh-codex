@@ -93,5 +93,9 @@ export function transformNativeWebSearchPayload(
   }
   if (!hostedInserted) nextTools.push(hosted)
 
-  return { ...payload, tools: nextTools }
+  const include = Array.isArray(payload['include']) ? payload['include'] : []
+  const nextInclude = include.includes('web_search_call.action.sources')
+    ? include
+    : [...include, 'web_search_call.action.sources']
+  return { ...payload, tools: nextTools, include: nextInclude }
 }

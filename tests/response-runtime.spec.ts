@@ -78,6 +78,7 @@ describe('OpenAICodexResponseRuntime transport policy', () => {
     expect(transformed).toEqual({
       store: false,
       input: [],
+      include: ['web_search_call.action.sources'],
       tools: [{ type: 'web_search', external_web_access: false }],
     })
   })

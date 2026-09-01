@@ -14,6 +14,7 @@ import {
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
+import { structuredCodexBlock } from '../src/structured-search.ts'
 
 let context: Context | undefined
 let root: string | undefined
@@ -183,8 +184,14 @@ describe('OpenAI Codex compaction request', () => {
       sessionId: 'session-compaction' as never,
     })) assembler.push(chunk)
 
-    expect(assembler.message({ kind: 'model', provider: 'openai-codex', model: 'gpt-5.6-sol' }).content)
+    const compactedContent = assembler.message({
+      kind: 'model', provider: 'openai-codex', model: 'gpt-5.6-sol',
+    }).content
+    expect(compactedContent.filter(block => block.type !== 'text' || block.text !== ''))
       .toEqual([{ type: 'text', text: 'summary' }])
+    expect(compactedContent.map(structuredCodexBlock).filter(Boolean)).toEqual([
+      expect.objectContaining({ type: 'codex-response-message', id: 'msg_compaction' }),
+    ])
     if (request === undefined) throw new Error('Codex request was not captured')
     const captured = request as { url: string; init: RequestInit }
     const headers = new Headers(captured.init.headers)
@@ -371,11 +378,16 @@ describe('OpenAI Codex compaction request', () => {
       sessionId: 'session-native-fallback' as never,
     })) assembler.push(chunk)
 
-    expect(assembler.message({
+    const fallbackContent = assembler.message({
       kind: 'model',
       provider: 'openai-codex',
       model: 'gpt-5.6-sol',
-    }).content).toEqual([{ type: 'text', text: 'fallback summary' }])
+    }).content
+    expect(fallbackContent.filter(block => block.type !== 'text' || block.text !== ''))
+      .toEqual([{ type: 'text', text: 'fallback summary' }])
+    expect(fallbackContent.map(structuredCodexBlock).filter(Boolean)).toEqual([
+      expect.objectContaining({ type: 'codex-response-message', id: 'msg_compaction' }),
+    ])
     expect(requests.map(request => request.url)).toEqual([
       'https://chatgpt.com/backend-api/codex/responses',
       'https://chatgpt.com/backend-api/codex/responses',
