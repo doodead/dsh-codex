@@ -4,7 +4,7 @@ import type { Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, AssistantMessageEvent } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { convertResponsesMessages } from '@earendil-works/pi-ai/api/openai-responses-shared'
-import { toCodexAssistant } from '../src/codex-replay.ts'
+import { toCodexAssistant, toCodexReplayState } from '../src/codex-replay.ts'
 import { toStreamChunks } from '../src/codex-stream.ts'
 import {
   encodeCodexReplayMarker,
@@ -124,6 +124,239 @@ describe('structured Codex search protocol', () => {
     expect(() => parseCodexWebSearchBlock({
       type: 'web_search_call', id: 'ws', status: 'in_progress', action: null,
     })).toThrow('Codex web search action is malformed')
+  })
+
+  it('hides empty native reasoning without losing exact replay', async () => {
+    const reasoningItem = {
+      type: 'reasoning', id: 'rs_empty', summary: [],
+      encrypted_content: 'encrypted-empty-reasoning',
+    }
+    const { encrypted_content: _terminalOnly, ...doneReasoningItem } = reasoningItem
+    const output = emptyAssistant()
+    const pushed: AssistantMessageEvent[] = []
+    const raw = async function* (): AsyncGenerator<unknown> {
+      yield {
+        type: 'response.output_item.added', output_index: 0,
+        item: { type: 'reasoning', id: 'rs_empty', summary: [], status: 'in_progress' },
+      }
+      yield {
+        type: 'response.output_item.done', output_index: 0,
+        item: doneReasoningItem,
+      }
+      yield {
+        type: 'response.completed',
+        response: { id: 'resp_empty', status: 'completed', output: [reasoningItem] },
+      }
+    }
+    await processStructuredResponsesStream(
+      raw(), output,
+      { push: (event: AssistantMessageEvent) => { pushed.push(event) } } as never,
+      model(),
+    )
+    pushed.push({ type: 'done', reason: 'stop', message: output })
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield* pushed
+    }
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+
+    expect(chunks.some(chunk => chunk.type === 'block-start' && chunk.blockType === 'reasoning')).toBe(false)
+    expect(chunks.some(chunk => chunk.type === 'reasoning-delta')).toBe(false)
+    expect(chunks.some(chunk => chunk.type === 'block-end')).toBe(false)
+
+    const assembler = new BlockAssembler()
+    for (const chunk of chunks) assembler.push(chunk)
+    expect(assembler.replayState).toBeDefined()
+    const stored = assembler.message({
+      kind: 'model', provider: output.provider, model: output.model,
+      replayState: assembler.replayState,
+    } as never)
+    expect(stored.content).toEqual([])
+    const reloaded = JSON.parse(JSON.stringify(stored)) as Message
+    const replayed = toCodexAssistant(reloaded)
+    expect(replayed.content).toEqual([{
+      type: 'thinking', thinking: '',
+      thinkingSignature: JSON.stringify(reasoningItem),
+    }])
+    expect(convertResponsesMessages(model(), { messages: [replayed] }, new Set(['openai-codex']), {
+      includeSystemPrompt: false,
+    })).toEqual([reasoningItem])
+    expect(toCodexAssistant({
+      ...stored,
+      source: { kind: 'model', provider: 'foreign', model: 'foreign' },
+    } as Message).content).toEqual([])
+  })
+
+  it('keeps hidden reasoning ordered around structured search replay', () => {
+    const before = {
+      type: 'reasoning', id: 'rs_before_search', summary: [],
+      encrypted_content: 'encrypted-before-search',
+    }
+    const after = {
+      type: 'reasoning', id: 'rs_after_search', summary: [],
+      encrypted_content: 'encrypted-after-search',
+    }
+    const searches = [
+      parseCodexWebSearchBlock({
+        type: 'web_search_call', id: 'ws_interleaved', status: 'in_progress',
+      }),
+      parseCodexWebSearchBlock({
+        type: 'web_search_call', id: 'ws_interleaved', status: 'searching',
+      }),
+      parseCodexWebSearchBlock({
+        type: 'web_search_call', id: 'ws_interleaved', status: 'completed',
+        action: { type: 'search', query: 'trace-shaped search' },
+      }),
+    ]
+    const output = emptyAssistant()
+    ;(output.content as unknown[]).push(
+      { type: 'thinking', thinking: '', thinkingSignature: JSON.stringify(before) },
+      ...searches.map(search => ({ ...search, type: 'codexWebSearch' })),
+      { type: 'thinking', thinking: '', thinkingSignature: JSON.stringify(after) },
+    )
+    const replayState = toCodexReplayState(output, false)
+    const stored = {
+      role: 'assistant',
+      content: searches.map(framedCodexBlock),
+      source: {
+        kind: 'model', provider: output.provider, model: output.model, replayState,
+      },
+    } as unknown as Message
+
+    expect(replayState).toEqual(expect.objectContaining({
+      blocks: [
+        expect.objectContaining({
+          type: 'codex-web-search',
+          leadingReasoning: [{ thinkingSignature: JSON.stringify(before) }],
+        }),
+        expect.objectContaining({ type: 'codex-web-search' }),
+        expect.objectContaining({
+          type: 'codex-web-search',
+          trailingReasoning: [{ thinkingSignature: JSON.stringify(after) }],
+        }),
+      ],
+    }))
+    const replayed = toCodexAssistant(JSON.parse(JSON.stringify(stored)) as Message)
+    const exact = expandCodexReplayMarkers(convertResponsesMessages(
+      model(), { messages: [replayed] }, new Set(['openai-codex']),
+      { includeSystemPrompt: false },
+    ))
+    expect(exact).toEqual([
+      before,
+      expect.objectContaining({
+        type: 'web_search_call', id: 'ws_interleaved', status: 'completed',
+      }),
+      after,
+    ])
+  })
+
+  it('continues streaming non-empty native reasoning', async () => {
+    const output = emptyAssistant()
+    output.content.push({ type: 'thinking', thinking: 'visible thought' })
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield { type: 'start', partial: output }
+      yield { type: 'thinking_start', contentIndex: 0, partial: output }
+      yield { type: 'thinking_delta', contentIndex: 0, delta: '\n\n', partial: output }
+      yield { type: 'thinking_delta', contentIndex: 0, delta: 'visible thought', partial: output }
+      yield { type: 'thinking_end', contentIndex: 0, content: '\n\nvisible thought', partial: output }
+      yield { type: 'done', reason: 'stop', message: output }
+    }
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+
+    expect(chunks).toContainEqual({ type: 'block-start', index: 0, blockType: 'reasoning' })
+    expect(chunks).toContainEqual({ type: 'reasoning-delta', index: 0, text: '\n\nvisible thought' })
+    expect(chunks).toContainEqual({
+      type: 'block-end', index: 0,
+      block: { type: 'reasoning', text: '\n\nvisible thought' },
+    })
+  })
+
+  it('anchors hidden reasoning before the next retained block', async () => {
+    const reasoningItem = {
+      type: 'reasoning', id: 'rs_before_text', summary: [], encrypted_content: 'encrypted-before-text',
+    }
+    const output = emptyAssistant()
+    output.content.push(
+      { type: 'thinking', thinking: '', thinkingSignature: JSON.stringify(reasoningItem) },
+      { type: 'text', text: 'answer', textSignature: 'text-signature' },
+    )
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield { type: 'start', partial: output }
+      yield { type: 'thinking_start', contentIndex: 0, partial: output }
+      yield { type: 'thinking_end', contentIndex: 0, content: '', partial: output }
+      yield { type: 'text_start', contentIndex: 1, partial: output }
+      yield { type: 'text_delta', contentIndex: 1, delta: 'answer', partial: output }
+      yield { type: 'text_end', contentIndex: 1, content: 'answer', partial: output }
+      yield { type: 'done', reason: 'stop', message: output }
+    }
+
+    const assembler = new BlockAssembler()
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) assembler.push(chunk)
+    const stored = assembler.message({
+      kind: 'model', provider: output.provider, model: output.model,
+      replayState: assembler.replayState,
+    } as never)
+
+    expect(stored.content).toEqual([{ type: 'text', text: 'answer' }])
+    expect(assembler.replayState).toEqual(expect.objectContaining({
+      blocks: [{
+        type: 'text', textSignature: 'text-signature',
+        leadingReasoning: [{ thinkingSignature: JSON.stringify(reasoningItem) }],
+      }],
+    }))
+    expect(toCodexAssistant(stored).content).toEqual([
+      { type: 'thinking', thinking: '', thinkingSignature: JSON.stringify(reasoningItem) },
+      { type: 'text', text: 'answer', textSignature: 'text-signature' },
+    ])
+  })
+
+  it('prunes hidden reasoning with a dropped max-token tool call', async () => {
+    const output = emptyAssistant()
+    output.stopReason = 'length'
+    output.content.push(
+      { type: 'thinking', thinking: '', thinkingSignature: '{"type":"reasoning","id":"rs_tool"}' },
+      { type: 'toolCall', id: 'call_1|fc_1', name: 'inspect', arguments: { path: 'README.md' } },
+    )
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield { type: 'start', partial: output }
+      yield { type: 'thinking_start', contentIndex: 0, partial: output }
+      yield { type: 'thinking_end', contentIndex: 0, content: '', partial: output }
+      yield { type: 'toolcall_start', contentIndex: 1, partial: output }
+      yield { type: 'toolcall_delta', contentIndex: 1, delta: '{"path":"README.md"}', partial: output }
+      yield { type: 'toolcall_end', contentIndex: 1, toolCall: output.content[1] as never, partial: output }
+      yield { type: 'done', reason: 'length', message: output }
+    }
+
+    const assembler = new BlockAssembler()
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) assembler.push(chunk)
+
+    expect(assembler.blocks()).toEqual([])
+    expect(assembler.replayState).toEqual(expect.objectContaining({ blocks: [] }))
+  })
+
+  it('closes interrupted empty reasoning invisibly with aligned replay', async () => {
+    const output = emptyAssistant()
+    output.content.push({ type: 'thinking', thinking: '' })
+    const failure = { ...output, stopReason: 'aborted', errorMessage: 'cancelled' } as AssistantMessage
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield { type: 'start', partial: output }
+      yield { type: 'thinking_start', contentIndex: 0, partial: output }
+      yield { type: 'error', reason: 'aborted', error: failure }
+    }
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+    const assembler = new BlockAssembler()
+    for (const chunk of chunks) assembler.push(chunk)
+
+    expect(assembler.blocks()).toEqual([])
+    expect(assembler.replayState).toEqual(expect.objectContaining({
+      response: expect.objectContaining({ trailingReasoning: [{}] }),
+      blocks: [],
+    }))
   })
 
   it('validates and preserves all supported actions', () => {
@@ -343,6 +576,28 @@ describe('structured Codex search protocol', () => {
     expect(toCodexAssistant(malformed as unknown as Message, reason => { degraded = reason }).content)
       .toEqual([{ type: 'text', text: 'legacy' }])
     expect(degraded).toContain('unknown type')
+
+    const legacyEmptyReasoning = {
+      role: 'assistant',
+      content: [{ type: 'reasoning', text: '' }],
+      source: {
+        kind: 'model', provider: 'openai-codex', model: model().id,
+        replayState: {
+          response: {
+            kind: 'dsh-codex-pi-ai', version: 1, api: 'openai-codex-responses',
+            provider: 'openai-codex', model: model().id, stopReason: 'stop',
+          },
+          blocks: [{
+            type: 'reasoning',
+            thinkingSignature: '{"type":"reasoning","id":"legacy-empty","summary":[]}',
+          }],
+        },
+      },
+    } as unknown as Message
+    expect(toCodexAssistant(legacyEmptyReasoning).content).toEqual([{
+      type: 'thinking', thinking: '',
+      thinkingSignature: '{"type":"reasoning","id":"legacy-empty","summary":[]}',
+    }])
   })
 
   it('drops invisible structured frames from provider-neutral replay', () => {

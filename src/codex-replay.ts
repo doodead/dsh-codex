@@ -16,13 +16,26 @@ import type {
   CodexWebSearchBlock,
 } from './structured-search.ts'
 
-export type CodexReplayBlock =
+export interface CodexReplayReasoning {
+  thinkingSignature?: string
+  redacted?: boolean
+}
+
+interface CodexReplayPlacement {
+  /** Empty native reasoning items immediately before this visible block. */
+  leadingReasoning?: readonly CodexReplayReasoning[]
+  /** Empty native reasoning items immediately after the final visible block. */
+  trailingReasoning?: readonly CodexReplayReasoning[]
+}
+
+export type CodexReplayBlock = (
   | { type: 'text'; textSignature?: string }
   | { type: 'reasoning'; thinkingSignature?: string; redacted?: boolean }
   | { type: 'tool-call'; thoughtSignature?: string }
   | { type: 'codex-web-search'; block: CodexWebSearchBlock }
   | { type: 'codex-response-message'; block: CodexResponseMessageBlock }
   | { type: 'foreign-sources' }
+) & CodexReplayPlacement
 
 export interface CodexReplayResponse {
   kind: 'pi-ai' | 'dsh-codex-pi-ai'
@@ -33,6 +46,8 @@ export interface CodexReplayResponse {
   responseModel?: string
   responseId?: string
   stopReason: AssistantMessage['stopReason']
+  /** Empty reasoning when the native response has no visible blocks at all. */
+  trailingReasoning?: readonly CodexReplayReasoning[]
 }
 
 interface CodexReplayState {
@@ -73,29 +88,51 @@ function responseMessageBlock(block: CodexPiResponseMessageContent): CodexRespon
   return { ...block, type: 'codex-response-message' }
 }
 
+function replayReasoning(block: Extract<AssistantMessage['content'][number], { type: 'thinking' }>): CodexReplayReasoning {
+  return {
+    ...block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature },
+    ...block.redacted === undefined ? {} : { redacted: block.redacted },
+  }
+}
+
+function replayBlock(block: ExtendedPiContent): CodexReplayBlock {
+  switch (block.type) {
+    case 'text': return { type: 'text', ...block.textSignature === undefined ? {} : { textSignature: block.textSignature } }
+    case 'thinking': return { type: 'reasoning', ...replayReasoning(block) }
+    case 'toolCall': return { type: 'tool-call', ...block.thoughtSignature === undefined ? {} : { thoughtSignature: block.thoughtSignature } }
+    case 'codexWebSearch': return { type: 'codex-web-search', block: webSearchBlock(block) }
+    case 'codexResponseMessage': return { type: 'codex-response-message', block: responseMessageBlock(block) }
+    default: throw new LlmError(`unsupported Codex pi-ai replay block ${(block as { type: string }).type}`, 'INVALID_REPLAY_STATE')
+  }
+}
+
 /** Build metadata aligned with every DSH block emitted for this response. */
 export function toCodexReplayState(message: AssistantMessage, appendForeignSources: boolean): ReplayEnvelope {
-  const response: CodexReplayResponse = {
+  let response: CodexReplayResponse = {
     kind: 'dsh-codex-pi-ai', version: 1, api: message.api,
     provider: message.provider, model: message.model,
     ...message.responseModel === undefined ? {} : { responseModel: message.responseModel },
     ...message.responseId === undefined ? {} : { responseId: message.responseId },
     stopReason: message.stopReason,
   }
-  const blocks = (message.content as ExtendedPiContent[]).map((block): CodexReplayBlock => {
-    switch (block.type) {
-      case 'text': return { type: 'text', ...block.textSignature === undefined ? {} : { textSignature: block.textSignature } }
-      case 'thinking': return {
-        type: 'reasoning',
-        ...block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature },
-        ...block.redacted === undefined ? {} : { redacted: block.redacted },
-      }
-      case 'toolCall': return { type: 'tool-call', ...block.thoughtSignature === undefined ? {} : { thoughtSignature: block.thoughtSignature } }
-      case 'codexWebSearch': return { type: 'codex-web-search', block: webSearchBlock(block) }
-      case 'codexResponseMessage': return { type: 'codex-response-message', block: responseMessageBlock(block) }
-      default: throw new LlmError(`unsupported Codex pi-ai replay block ${(block as { type: string }).type}`, 'INVALID_REPLAY_STATE')
+  const blocks: CodexReplayBlock[] = []
+  let leadingReasoning: CodexReplayReasoning[] = []
+  for (const block of message.content as ExtendedPiContent[]) {
+    if (block.type === 'thinking' && block.thinking.trim() === '') {
+      leadingReasoning.push(replayReasoning(block))
+      continue
     }
-  })
+    blocks.push({
+      ...replayBlock(block),
+      ...leadingReasoning.length === 0 ? {} : { leadingReasoning },
+    })
+    leadingReasoning = []
+  }
+  if (leadingReasoning.length > 0) {
+    const last = blocks.at(-1)
+    if (last === undefined) response = { ...response, trailingReasoning: leadingReasoning }
+    else blocks[blocks.length - 1] = { ...last, trailingReasoning: leadingReasoning }
+  }
   if (appendForeignSources) blocks.push({ type: 'foreign-sources' })
   return { response, blocks }
 }
@@ -119,23 +156,75 @@ function invalidReplay(message: string): never {
   throw new LlmError(`invalid Codex pi-ai replay state: ${message}`, 'INVALID_REPLAY_STATE')
 }
 
+function readReplayReasoning(value: unknown, field: string): readonly CodexReplayReasoning[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) return invalidReplay(`${field} must be an array`)
+  return value.map((entry, position) => {
+    const reasoning = record(entry)
+    if (reasoning === undefined) return invalidReplay(`${field} item ${position} must be an object`)
+    if (reasoning['thinkingSignature'] !== undefined && typeof reasoning['thinkingSignature'] !== 'string') {
+      return invalidReplay(`${field} item ${position} thinkingSignature must be a string`)
+    }
+    if (reasoning['redacted'] !== undefined && typeof reasoning['redacted'] !== 'boolean') {
+      return invalidReplay(`${field} item ${position} redacted must be boolean`)
+    }
+    return {
+      ...reasoning['thinkingSignature'] === undefined ? {} : { thinkingSignature: reasoning['thinkingSignature'] },
+      ...reasoning['redacted'] === undefined ? {} : { redacted: reasoning['redacted'] },
+    } as CodexReplayReasoning
+  })
+}
+
+function readReplayPlacement(block: Record<string, unknown>, index: number): CodexReplayPlacement {
+  const leadingReasoning = readReplayReasoning(
+    block['leadingReasoning'],
+    `block ${index} leadingReasoning`,
+  )
+  const trailingReasoning = readReplayReasoning(
+    block['trailingReasoning'],
+    `block ${index} trailingReasoning`,
+  )
+  return {
+    ...leadingReasoning === undefined ? {} : { leadingReasoning },
+    ...trailingReasoning === undefined ? {} : { trailingReasoning },
+  }
+}
+
 function readReplayBlock(value: unknown, index: number): CodexReplayBlock {
   const block = record(value)
   if (block === undefined || typeof block['type'] !== 'string') return invalidReplay(`block ${index} must be an object`)
+  const placement = readReplayPlacement(block, index)
   switch (block['type']) {
     case 'text':
       if (block['textSignature'] !== undefined && typeof block['textSignature'] !== 'string') return invalidReplay(`block ${index} textSignature must be a string`)
-      return block as unknown as CodexReplayBlock
+      return {
+        type: 'text',
+        ...block['textSignature'] === undefined ? {} : { textSignature: block['textSignature'] },
+        ...placement,
+      }
     case 'reasoning':
       if (block['thinkingSignature'] !== undefined && typeof block['thinkingSignature'] !== 'string') return invalidReplay(`block ${index} thinkingSignature must be a string`)
       if (block['redacted'] !== undefined && typeof block['redacted'] !== 'boolean') return invalidReplay(`block ${index} redacted must be boolean`)
-      return block as unknown as CodexReplayBlock
+      return {
+        type: 'reasoning',
+        ...block['thinkingSignature'] === undefined ? {} : { thinkingSignature: block['thinkingSignature'] },
+        ...block['redacted'] === undefined ? {} : { redacted: block['redacted'] },
+        ...placement,
+      }
     case 'tool-call':
       if (block['thoughtSignature'] !== undefined && typeof block['thoughtSignature'] !== 'string') return invalidReplay(`block ${index} thoughtSignature must be a string`)
-      return block as unknown as CodexReplayBlock
+      return {
+        type: 'tool-call',
+        ...block['thoughtSignature'] === undefined ? {} : { thoughtSignature: block['thoughtSignature'] },
+        ...placement,
+      }
     case 'codex-web-search': {
       const native = record(block['block'])
-      return { type: 'codex-web-search', block: parseCodexWebSearchBlock({ ...(native ?? {}), type: 'web_search_call' }) }
+      return {
+        type: 'codex-web-search',
+        block: parseCodexWebSearchBlock({ ...(native ?? {}), type: 'web_search_call' }),
+        ...placement,
+      }
     }
     case 'codex-response-message': {
       const native = record(block['block'])
@@ -154,9 +243,10 @@ function readReplayBlock(value: unknown, index: number): CodexReplayBlock {
       return {
         type: 'codex-response-message',
         block: parseCodexResponseMessageBlock({ ...(native ?? {}), type: 'message', content }),
+        ...placement,
       }
     }
-    case 'foreign-sources': return { type: 'foreign-sources' }
+    case 'foreign-sources': return { type: 'foreign-sources', ...placement }
     default: return invalidReplay(`block ${index} has an unknown type`)
   }
 }
@@ -176,6 +266,7 @@ function readReplayState(value: unknown): CodexReplayState {
   if (!['stop', 'length', 'toolUse', 'error', 'aborted'].includes(String(response['stopReason']))) return invalidReplay('unknown stopReason')
   if (response['responseModel'] !== undefined && typeof response['responseModel'] !== 'string') return invalidReplay('responseModel must be a string')
   if (response['responseId'] !== undefined && typeof response['responseId'] !== 'string') return invalidReplay('responseId must be a string')
+  readReplayReasoning(response['trailingReasoning'], 'response trailingReasoning')
   const rawBlocks = envelope?.['blocks']
   if (!Array.isArray(rawBlocks)) return invalidReplay('blocks must be an array')
   return { response: response as unknown as CodexReplayResponse, blocks: rawBlocks.map(readReplayBlock) }
@@ -207,24 +298,38 @@ function sameStructuredBlock(left: CodexWebSearchBlock | CodexResponseMessageBlo
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function emptyReasoningContent(reasoning: CodexReplayReasoning): Extract<AssistantMessage['content'][number], { type: 'thinking' }> {
+  return {
+    type: 'thinking',
+    thinking: '',
+    ...reasoning.thinkingSignature === undefined ? {} : { thinkingSignature: reasoning.thinkingSignature },
+    ...reasoning.redacted === undefined ? {} : { redacted: reasoning.redacted },
+  }
+}
+
 function replayedAssistant(message: Message, source: ModelMessageSource, rawState: unknown): AssistantMessage {
   const state = readReplayState(rawState)
   if (state.response.provider !== source.provider) return invalidReplay('provider does not match assistant source')
   if (state.response.model !== source.model) return invalidReplay('model does not match assistant source')
   if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')
-  const content: AssistantMessage['content'] = message.content.map((block, index) => {
+  const content: AssistantMessage['content'] = []
+  message.content.forEach((block, index) => {
     const replay = state.blocks[index]
     if (replay === undefined) return invalidReplay(`block ${index} metadata is absent`)
+    content.push(...(replay.leadingReasoning ?? []).map(emptyReasoningContent))
     switch (replay.type) {
       case 'text':
         if (block.type !== 'text') return invalidReplay(`block ${index} does not match text content`)
-        return { type: 'text', text: block.text, ...replay.textSignature === undefined ? {} : { textSignature: replay.textSignature } }
+        content.push({ type: 'text', text: block.text, ...replay.textSignature === undefined ? {} : { textSignature: replay.textSignature } })
+        break
       case 'reasoning':
         if (block.type !== 'reasoning') return invalidReplay(`block ${index} does not match reasoning content`)
-        return { type: 'thinking', thinking: block.text, ...replay.thinkingSignature === undefined ? {} : { thinkingSignature: replay.thinkingSignature }, ...replay.redacted === undefined ? {} : { redacted: replay.redacted } }
+        content.push({ type: 'thinking', thinking: block.text, ...replay.thinkingSignature === undefined ? {} : { thinkingSignature: replay.thinkingSignature }, ...replay.redacted === undefined ? {} : { redacted: replay.redacted } })
+        break
       case 'tool-call':
         if (block.type !== 'tool-call') return invalidReplay(`block ${index} does not match tool-call content`)
-        return { type: 'toolCall', id: block.id, name: block.name, arguments: parseArguments(block.arguments), ...replay.thoughtSignature === undefined ? {} : { thoughtSignature: replay.thoughtSignature } }
+        content.push({ type: 'toolCall', id: block.id, name: block.name, arguments: parseArguments(block.arguments), ...replay.thoughtSignature === undefined ? {} : { thoughtSignature: replay.thoughtSignature } })
+        break
       case 'codex-web-search':
         {
           const structured = structuredCodexBlock(block)
@@ -232,7 +337,8 @@ function replayedAssistant(message: Message, source: ModelMessageSource, rawStat
             return invalidReplay(`block ${index} does not match web-search content`)
           }
         }
-        return markerContent(encodeCodexReplayMarker({ kind: 'web-search', block: replay.block }))
+        content.push(markerContent(encodeCodexReplayMarker({ kind: 'web-search', block: replay.block })))
+        break
       case 'codex-response-message':
         {
           const structured = structuredCodexBlock(block)
@@ -240,13 +346,17 @@ function replayedAssistant(message: Message, source: ModelMessageSource, rawStat
             return invalidReplay(`block ${index} does not match response-message content`)
           }
         }
-        return markerContent(encodeCodexReplayMarker({ kind: 'response-message', block: replay.block }))
+        content.push(markerContent(encodeCodexReplayMarker({ kind: 'response-message', block: replay.block })))
+        break
       case 'foreign-sources':
         if (block.type !== 'text') return invalidReplay(`block ${index} does not match foreign-sources content`)
-        return markerContent(encodeCodexReplayMarker({ kind: 'foreign-sources' }))
-      default: return replay satisfies never
+        content.push(markerContent(encodeCodexReplayMarker({ kind: 'foreign-sources' })))
+        break
+      default: replay satisfies never
     }
+    content.push(...(replay.trailingReasoning ?? []).map(emptyReasoningContent))
   })
+  content.push(...(state.response.trailingReasoning ?? []).map(emptyReasoningContent))
   return {
     role: 'assistant', content, api: state.response.api, provider: state.response.provider, model: state.response.model,
     ...state.response.responseModel === undefined ? {} : { responseModel: state.response.responseModel },

@@ -51,6 +51,30 @@ function structuredBlock(block: unknown): CodexStructuredBlock | undefined {
   }
 }
 
+interface PendingReasoning {
+  buffered: string
+  visible: boolean
+}
+
+function closeReasoning(
+  index: number,
+  state: PendingReasoning | undefined,
+  text: string,
+): StreamChunk[] {
+  if (text.trim() === '') {
+    if (state?.visible !== true) return []
+    throw new LlmError('Codex visible reasoning ended without content', 'PI_AI_ERROR')
+  }
+  return [
+    ...state?.visible === true ? [] : [{
+      type: 'block-start' as const,
+      index,
+      blockType: 'reasoning' as const,
+    }],
+    { type: 'block-end', index, block: { type: 'reasoning', text } },
+  ]
+}
+
 // XXX(pi-ai upstream): pi-ai flattens the caught error to `error.message`
 // (api/anthropic-messages.js: `errorMessage = error instanceof Error ?
 // error.message : JSON.stringify(error)`), discarding the original Error and its
@@ -148,10 +172,11 @@ export async function* toStreamChunks(
   events: AsyncIterable<AssistantMessageEvent | CodexStructuredAssistantEvent>,
   contextWindow?: number,
 ): AsyncGenerator<StreamChunk> {
-  // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
-  // in stream order), but we track ids per index for tool calls.
+  // Preserve pi-ai contentIndex values for live block positions. DSH tolerates
+  // gaps when an encrypted-only reasoning item is withheld from its renderer.
   const toolIds = new Map<number, { id: string; name: string }>()
   const openSearches = new Map<string, CodexWebSearchBlock>()
+  const reasoning = new Map<number, PendingReasoning>()
 
   for await (const event of events) {
     switch (event.type) {
@@ -167,14 +192,28 @@ export async function* toStreamChunks(
         yield { type: 'block-end', index: event.contentIndex, block: { type: 'text', text: event.content } }
         break
       case 'thinking_start':
+        reasoning.set(event.contentIndex, { buffered: '', visible: false })
+        break
+      case 'thinking_delta': {
+        const state = reasoning.get(event.contentIndex) ?? { buffered: '', visible: false }
+        state.buffered += event.delta
+        reasoning.set(event.contentIndex, state)
+        if (state.visible) {
+          yield { type: 'reasoning-delta', index: event.contentIndex, text: event.delta }
+          break
+        }
+        if (state.buffered.trim() === '') break
+        state.visible = true
         yield { type: 'block-start', index: event.contentIndex, blockType: 'reasoning' }
+        yield { type: 'reasoning-delta', index: event.contentIndex, text: state.buffered }
         break
-      case 'thinking_delta':
-        yield { type: 'reasoning-delta', index: event.contentIndex, text: event.delta }
+      }
+      case 'thinking_end': {
+        const state = reasoning.get(event.contentIndex)
+        reasoning.delete(event.contentIndex)
+        for (const chunk of closeReasoning(event.contentIndex, state, event.content)) yield chunk
         break
-      case 'thinking_end':
-        yield { type: 'block-end', index: event.contentIndex, block: { type: 'reasoning', text: event.content } }
-        break
+      }
       case 'toolcall_start': {
         // The id/name live on the partial's content at this index.
         const partial = event.partial.content[event.contentIndex]
@@ -261,6 +300,15 @@ export async function* toStreamChunks(
       }
       case 'done':
         {
+          for (const [index, state] of reasoning) {
+            const native = event.message.content[index]
+            const text = native?.type === 'thinking'
+              && (native.thinking.trim() !== '' || state.buffered.trim() === '')
+              ? native.thinking
+              : state.buffered
+            for (const chunk of closeReasoning(index, state, text)) yield chunk
+          }
+          reasoning.clear()
           const structured = (event.message.content as unknown[])
             .map(structuredBlock)
             .filter((block): block is CodexStructuredBlock => block !== undefined)
@@ -281,6 +329,15 @@ export async function* toStreamChunks(
         }
       case 'error':
         {
+          for (const [reasoningIndex, state] of reasoning) {
+            const native = event.error.content[reasoningIndex]
+            const text = native?.type === 'thinking'
+              && (native.thinking.trim() !== '' || state.buffered.trim() === '')
+              ? native.thinking
+              : state.buffered
+            for (const chunk of closeReasoning(reasoningIndex, state, text)) yield chunk
+          }
+          reasoning.clear()
           let index = event.error.content.length
           const failedSearches = event.error.stopReason === 'aborted'
             ? []
