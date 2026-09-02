@@ -40,7 +40,6 @@ function emptyAssistant(): AssistantMessage {
 async function* rawEvents(): AsyncGenerator<unknown> {
   const search = {
     type: 'web_search_call', id: 'ws_1', status: 'in_progress',
-    action: { type: 'search', query: 'dsh', queries: ['dsh', 'deepseek harness'] },
   }
   yield { type: 'response.created', response: { id: 'resp_1' } }
   yield { type: 'response.output_item.added', output_index: 0, item: search }
@@ -53,7 +52,7 @@ async function* rawEvents(): AsyncGenerator<unknown> {
     item: {
       ...search, status: 'completed',
       action: {
-        ...search.action,
+        type: 'search', query: 'dsh', queries: ['dsh', 'deepseek harness'],
         sources: [{ type: 'url', url: 'https://example.com/source' }],
       },
     },
@@ -113,6 +112,18 @@ describe('structured Codex search protocol', () => {
     expect(() => parseCodexWebSearchBlock({
       type: 'web_search_call', id: 'ws', status: 'completed', action: { type: 'browse' },
     })).toThrow('unsupported Codex web search action')
+  })
+
+  it('accepts an actionless live start but requires completed action data', () => {
+    expect(parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws', status: 'in_progress',
+    })).toEqual({ type: 'codex-web-search', id: 'ws', status: 'in_progress' })
+    expect(() => parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws', status: 'completed',
+    })).toThrow('Codex completed web search has no action')
+    expect(() => parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws', status: 'in_progress', action: null,
+    })).toThrow('Codex web search action is malformed')
   })
 
   it('validates and preserves all supported actions', () => {

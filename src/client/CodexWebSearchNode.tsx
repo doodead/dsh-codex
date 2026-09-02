@@ -56,7 +56,11 @@ function structuredBlocks(content: readonly ContentBlock[]): {
     let structured: ReturnType<typeof structuredCodexBlock>
     try { structured = structuredCodexBlock(block) } catch { return }
     if (structured?.type === 'codex-web-search') {
-      calls.set(structured.id, { key: structured.id, status: structured.status, action: structured.action })
+      calls.set(structured.id, {
+        key: structured.id,
+        status: structured.status,
+        ...structured.action === undefined ? {} : { action: structured.action },
+      })
     } else if (structured?.type === 'codex-response-message') {
       messages.set(index, structured)
     }
@@ -89,7 +93,7 @@ function updateChunk(state: SearchState, event: Extract<Parameters<ConversationN
     calls.set(structured.id, {
       key: structured.id,
       status: structured.status,
-      action: structured.action,
+      ...structured.action === undefined ? {} : { action: structured.action },
     })
     return {
       ...state, calls,

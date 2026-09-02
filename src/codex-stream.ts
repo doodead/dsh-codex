@@ -211,11 +211,12 @@ export async function* toStreamChunks(
         break
       case 'codex_web_search_start': {
         const native = (event.partial.content as unknown[])[event.contentIndex] as {
-          type: 'codexWebSearch'; id: string; status: CodexWebSearchBlock['status']; action: CodexWebSearchBlock['action']
+          type: 'codexWebSearch'; id: string; status: CodexWebSearchBlock['status']; action?: CodexWebSearchBlock['action']
         } | undefined
         if (native?.type !== 'codexWebSearch') throw new LlmError('Codex search start has no content block', 'PI_AI_ERROR')
         const block: CodexWebSearchBlock = {
-          type: 'codex-web-search', id: native.id, status: native.status, action: native.action,
+          type: 'codex-web-search', id: native.id, status: native.status,
+          ...native.action === undefined ? {} : { action: native.action },
         }
         const frame = framedCodexBlock(block)
         openSearches.set(block.id, block)
@@ -225,7 +226,8 @@ export async function* toStreamChunks(
       }
       case 'codex_web_search_end': {
         const block: CodexWebSearchBlock = {
-          type: 'codex-web-search', id: event.block.id, status: event.block.status, action: event.block.action,
+          type: 'codex-web-search', id: event.block.id, status: event.block.status,
+          ...event.block.action === undefined ? {} : { action: event.block.action },
         }
         const open = openSearches.get(block.id)
         if (open === undefined) throw new LlmError('Codex search end has no open record', 'PI_AI_ERROR')
@@ -237,7 +239,8 @@ export async function* toStreamChunks(
       }
       case 'codex_web_search_update': {
         const block: CodexWebSearchBlock = {
-          type: 'codex-web-search', id: event.block.id, status: event.block.status, action: event.block.action,
+          type: 'codex-web-search', id: event.block.id, status: event.block.status,
+          ...event.block.action === undefined ? {} : { action: event.block.action },
         }
         if (!openSearches.has(block.id)) throw new LlmError('Codex search update has no open record', 'PI_AI_ERROR')
         openSearches.set(block.id, block)

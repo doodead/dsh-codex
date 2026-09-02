@@ -31,7 +31,8 @@ export interface CodexWebSearchBlock {
   readonly type: 'codex-web-search'
   readonly id: string
   readonly status: CodexWebSearchStatus
-  readonly action: CodexWebSearchAction
+  /** Absent when the provider has not populated an action, including an early failure. */
+  readonly action?: CodexWebSearchAction
 }
 
 export interface CodexUrlCitation {
@@ -114,7 +115,12 @@ export function parseCodexWebSearchBlock(value: unknown): CodexWebSearchBlock {
   if (!(CODEX_WEB_SEARCH_STATUSES as readonly unknown[]).includes(status)) {
     throw new TypeError(`unsupported Codex web search status ${JSON.stringify(status)}`)
   }
-  const rawAction = record(item['action'])
+  const actionValue = item['action']
+  if (actionValue === undefined) {
+    if (status === 'completed') throw new TypeError('Codex completed web search has no action')
+    return { type: 'codex-web-search', id: item['id'], status: status as CodexWebSearchStatus }
+  }
+  const rawAction = record(actionValue)
   if (rawAction === undefined) throw new TypeError('Codex web search action is malformed')
   const actionType = rawAction?.['type']
   let action: CodexWebSearchAction
@@ -352,7 +358,7 @@ function nativeWebSearchItem(block: CodexWebSearchBlock): Record<string, unknown
     type: 'web_search_call',
     id: block.id,
     status: block.status,
-    action: block.action,
+    ...block.action === undefined ? {} : { action: block.action },
   }
 }
 
