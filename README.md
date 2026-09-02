@@ -107,6 +107,8 @@ Native hosted search has four configuration and live-settings keys:
 
 **Hosted-execution boundary:** once admitted, native search is part of the same OpenAI Responses request. If the model invokes it, OpenAI executes the search internally; no separate Harness function call is emitted, so any later Harness per-call approval or execution policy is not consulted. This is also true when `nativeWebSearchAlwaysAvailable` is `false`: that option controls only the catalog gate. Set `nativeWebSearch: false` when the normal Harness tool-call approval path must be preserved.
 
+Hosted-search calls, actions, sources, and URL citations travel as validated metadata on ordinary `assistant/chunk` events and are finalized in the adapter's replay state. The plugin does not write a plugin-owned outer session-event type, so stock Harness history readers can open these sessions before or without loading the plugin. The plugin client adds the compact search row when it is available; the ordinary assistant response remains readable without it.
+
 Configure the `llm-openai-codex` row in a profile patch:
 
 ```yaml
@@ -123,7 +125,7 @@ Configure the `llm-openai-codex` row in a profile patch:
 | `searchContextSize` | `medium` | `low`, `medium`, `high` |
 | `searchMaxOutputTokens` | `10000` | positive integer |
 
-Each resolved, secret-free auxiliary request is recorded before dispatch as the dedicated `web/openai-codex-search-llm-request` session event. The event is owned and registered by this plugin; no generic search event or dsh fork is required.
+Standalone search keeps its exact resolved, secret-free request construction inside the provider. Session persistence uses only Harness's ordinary tool-call and tool-result history; it does not add a plugin-owned request event.
 
 ## Responses API experiments
 

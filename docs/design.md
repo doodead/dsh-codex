@@ -50,9 +50,11 @@ The catalog check is the only Harness authorization boundary for a translated to
 
 The bundle also registers a provider for dsh's existing `web_search` tool. It uses the Codex standalone search endpoint with the same refreshable OAuth credential, maps structured text results to normalized HTTP(S) citations, and supports cached, indexed, and live modes. The endpoint is fixed so profile configuration cannot redirect the bearer token.
 
-Before dispatch, the provider records the exact resolved, secret-free `{ endpoint, body }` request as `web/openai-codex-search-llm-request`. This dedicated event belongs to the plugin; it is declaration-merged into `SessionEventMap` and registered with the running session vocabulary when the plugin loads. The registration remains installed for the process lifetime so hot reload cannot make an already-written session unreadable.
+Hosted Responses search lifecycle records and annotated response messages are schema-validated and attached as an extra JSON field to ordinary `assistant/chunk` data. They never become visible Assistant text and never introduce a plugin-owned outer session-event name. DSH's chunk-row encoder preserves them verbatim because it packs only exact built-in delta shapes. The terminal replay envelope independently retains native reasoning, searches, response parts, and citations for exact Codex replay after reload, compaction, or Fork.
 
-The plugin never writes the discontinued generic `web/search-model-request` event. A session containing the dedicated Codex event requires this plugin to be loaded because the request is model-visible history and is intentionally not ignorable.
+For live search updates, the adapter keeps the preceding real block open until the next ordinary provider chunk and carries structured frames on zero-length deltas for that block. Those deltas satisfy the standard stream grammar, do not create content, do not count as first-token output, and do not add an empty renderer row. If a response begins with hosted search before any real block exists, its frames are buffered onto the next ordinary chunk. The finalized replay envelope remains authoritative in both cases.
+
+The adapter does not append directly to the active Session. This prevents auxiliary requests such as title generation from contaminating the foreground agent session and keeps cold history readability independent of plugin load order. Standalone search persists only Harness's ordinary tool-call and tool-result history; it writes neither the discontinued generic `web/search-model-request` event nor the legacy `web/openai-codex-search-llm-request` event.
 
 ## Composition
 

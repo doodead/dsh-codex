@@ -20,6 +20,7 @@ import {
   OPENAI_CODEX_STRUCTURED_EVENT,
   parseCodexStructuredFrame,
   structuredCodexBlock,
+  structuredCodexChunkBlocks,
   structuredCodexReplayBlocks,
 } from '../structured-search.ts'
 
@@ -44,7 +45,7 @@ declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
 
 interface SearchState {
   readonly calls: ReadonlyMap<string, CodexWebSearchCallView>
-  readonly messages: ReadonlyMap<number, CodexResponseMessageBlock>
+  readonly messages: ReadonlyMap<string, CodexResponseMessageBlock>
   readonly firstSeq?: number
   readonly finalized: boolean
 }
@@ -55,10 +56,10 @@ function initialState(): SearchState {
 
 function structuredBlocks(content: readonly ContentBlock[], replayState?: unknown): {
   calls: ReadonlyMap<string, CodexWebSearchCallView>
-  messages: ReadonlyMap<number, CodexResponseMessageBlock>
+  messages: ReadonlyMap<string, CodexResponseMessageBlock>
 } {
   const calls = new Map<string, CodexWebSearchCallView>()
-  const messages = new Map<number, CodexResponseMessageBlock>()
+  const messages = new Map<string, CodexResponseMessageBlock>()
   let replay: readonly CodexStructuredBlock[] = []
   try { replay = structuredCodexReplayBlocks(replayState) } catch {}
   const legacy = replay.length === 0
@@ -77,13 +78,18 @@ function structuredBlocks(content: readonly ContentBlock[], replayState?: unknow
         ...structured.action === undefined ? {} : { action: structured.action },
       })
     } else if (structured?.type === 'codex-response-message') {
-      messages.set(index, structured)
+      messages.set(String(index), structured)
     }
   })
   return { calls, messages }
 }
 
-function updateStructured(state: SearchState, structured: CodexStructuredBlock, seq: number): SearchState {
+function updateStructured(
+  state: SearchState,
+  structured: CodexStructuredBlock,
+  seq: number,
+  ordinal = 0,
+): SearchState {
   if (structured.type === 'codex-web-search') {
     const calls = new Map(state.calls)
     calls.set(structured.id, {
@@ -94,16 +100,22 @@ function updateStructured(state: SearchState, structured: CodexStructuredBlock, 
     return { ...state, calls, firstSeq: state.firstSeq ?? seq }
   }
   const messages = new Map(state.messages)
-  messages.set(seq, structured)
+  messages.set(`${String(seq)}:${String(ordinal)}`, structured)
   return { ...state, messages }
 }
 
 function updateChunk(state: SearchState, event: Extract<Parameters<ConversationNodeDefinition<SearchState>['match']>[0], { type: 'assistant/chunk' }>): SearchState {
   const chunk = event.data.chunk
+  let current = state
+  try {
+    structuredCodexChunkBlocks(chunk).forEach((structured, ordinal) => {
+      current = updateStructured(current, structured, event.seq, ordinal)
+    })
+  } catch {}
   if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
     return {
-      ...state,
-      calls: new Map([...state.calls].map(([id, call]) => [
+      ...current,
+      calls: new Map([...current.calls].map(([id, call]) => [
         id,
         call.status === 'in_progress' || call.status === 'searching'
           ? { ...call, status: 'failed' }
@@ -113,13 +125,13 @@ function updateChunk(state: SearchState, event: Extract<Parameters<ConversationN
     }
   }
   if (chunk.type === 'finish' && chunk.reason.kind === 'aborted') {
-    return { ...state, finalized: false }
+    return { ...current, finalized: false }
   }
-  if (chunk.type !== 'block-end') return state
+  if (chunk.type !== 'block-end') return current
   try {
     const structured = structuredCodexBlock(chunk.block)
-    return structured === undefined ? state : updateStructured(state, structured, event.seq)
-  } catch { return state }
+    return structured === undefined ? current : updateStructured(current, structured, event.seq)
+  } catch { return current }
 }
 
 function locationClosed(location: ConversationLocation): boolean {
@@ -127,7 +139,7 @@ function locationClosed(location: ConversationLocation): boolean {
   return location.kind === 'turn' && location.turn.status === 'closed'
 }
 
-function citationsOf(messages: ReadonlyMap<number, CodexResponseMessageBlock>): CodexUrlCitation[] {
+function citationsOf(messages: ReadonlyMap<string, CodexResponseMessageBlock>): CodexUrlCitation[] {
   const seen = new Set<string>()
   const result: CodexUrlCitation[] = []
   for (const message of messages.values()) {

@@ -11,9 +11,9 @@ import {
 import { en, zh } from '../src/client/locales.ts'
 import type { OpenAICodexSettingsKey } from '../src/client/locales.ts'
 import {
-  codexStructuredFrame,
+  carryCodexStructuredBlocks,
   framedCodexBlock,
-  OPENAI_CODEX_STRUCTURED_EVENT,
+  structuredCodexChunkBlocks,
 } from '../src/structured-search.ts'
 import { inject as clientInject } from '../src/client/index.tsx'
 
@@ -47,12 +47,14 @@ describe('Codex hosted-search conversation row', () => {
       matches: [start], start, state: undefined, current: new Map(),
     }
     const state = codexWebSearchDefinition.start(context, start, { previous: () => undefined })
-    const began = match(event(OPENAI_CODEX_STRUCTURED_EVENT, {
+    const began = match(event('assistant/chunk', {
       turn: 1, step: 2,
-      frame: codexStructuredFrame({
+      chunk: carryCodexStructuredBlocks({
+        type: 'usage', usage: { inputTokens: 0, outputTokens: 0 },
+      }, [{
         type: 'codex-web-search', id: 'ws-1', status: 'in_progress',
         action: { type: 'search', query: 'dsh', queries: ['dsh'] },
-      }),
+      }]),
     }, 2), 'update', openLocation)
     const runningState = codexWebSearchDefinition.update(
       { ...context, state, matches: [start, began] },
@@ -234,11 +236,16 @@ describe('Codex hosted-search conversation row', () => {
     expect(clientInject).not.toContain('conversationEvents')
   })
 
-  it('uses non-content session events for live framing', () => {
-    const framed = codexStructuredFrame({
+  it('uses standard chunks for layout-free live framing', () => {
+    const chunk = carryCodexStructuredBlocks({
+      type: 'usage', usage: { inputTokens: 0, outputTokens: 0 },
+    }, [{
       type: 'codex-web-search', id: 'hidden', status: 'completed',
       action: { type: 'search', query: 'hidden' },
-    })
-    expect(framed).toMatchObject({ version: 1, kind: 'web-search' })
+    }])
+    expect(chunk).toMatchObject({ type: 'usage' })
+    expect(structuredCodexChunkBlocks(chunk)).toEqual([
+      expect.objectContaining({ type: 'codex-web-search', id: 'hidden' }),
+    ])
   })
 })

@@ -14,6 +14,7 @@ import {
   parseCodexResponseMessageBlock,
   parseCodexWebSearchBlock,
   structuredCodexBlock,
+  structuredCodexChunkBlocks,
   structuredCodexReplayBlocks,
 } from '../src/structured-search.ts'
 import type { CodexStructuredBlock } from '../src/structured-search.ts'
@@ -277,6 +278,63 @@ describe('structured Codex search protocol', () => {
     })
   })
 
+  it('streams search metadata on a real block without creating empty content', async () => {
+    const started = parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws_live', status: 'in_progress',
+    })
+    const searching = { ...started, status: 'searching' as const }
+    const completed = parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws_live', status: 'completed',
+      action: { type: 'search', query: 'metadata carrier' },
+    })
+    const output = emptyAssistant()
+    ;(output.content as unknown[]).push(
+      { type: 'thinking', thinking: 'visible thought' },
+      { ...started, type: 'codexWebSearch' },
+      { type: 'text', text: 'answer' },
+    )
+    const events = async function* (): AsyncGenerator<AssistantMessageEvent> {
+      yield { type: 'start', partial: output }
+      yield { type: 'thinking_start', contentIndex: 0, partial: output }
+      yield { type: 'thinking_delta', contentIndex: 0, delta: 'visible thought', partial: output }
+      yield { type: 'thinking_end', contentIndex: 0, content: 'visible thought', partial: output }
+      yield { type: 'codex_web_search_start', contentIndex: 1, partial: output } as unknown as AssistantMessageEvent
+      yield {
+        type: 'codex_web_search_update', contentIndex: 1,
+        block: { ...searching, type: 'codexWebSearch' }, partial: output,
+      } as unknown as AssistantMessageEvent
+      ;(output.content as unknown[])[1] = { ...completed, type: 'codexWebSearch' }
+      yield {
+        type: 'codex_web_search_end', contentIndex: 1,
+        block: { ...completed, type: 'codexWebSearch' }, partial: output,
+      } as unknown as AssistantMessageEvent
+      yield { type: 'text_start', contentIndex: 2, partial: output }
+      yield { type: 'text_delta', contentIndex: 2, delta: 'answer', partial: output }
+      yield { type: 'text_end', contentIndex: 2, content: 'answer', partial: output }
+      yield { type: 'done', reason: 'stop', message: output }
+    }
+
+    const chunks: StreamChunk[] = []
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+
+    const carriers = chunks.filter(chunk => structuredCodexChunkBlocks(chunk).length > 0)
+    expect(carriers).toHaveLength(3)
+    expect(carriers.every(chunk => chunk.type === 'reasoning-delta'
+      && chunk.index === 0 && chunk.text === '')).toBe(true)
+    expect(carriers.flatMap(chunk => structuredCodexChunkBlocks(chunk))).toEqual([
+      started, searching, completed,
+    ])
+    expect(chunks.findIndex(chunk => chunk.type === 'block-end' && chunk.index === 0))
+      .toBeGreaterThan(chunks.lastIndexOf(carriers[2] as StreamChunk))
+
+    const assembler = new BlockAssembler()
+    for (const chunk of chunks) assembler.push(chunk)
+    expect(assembler.blocks()).toEqual([
+      { type: 'reasoning', text: 'visible thought' },
+      { type: 'text', text: 'answer' },
+    ])
+  })
+
   it('anchors hidden reasoning before the next retained block', async () => {
     const reasoningItem = {
       type: 'reasoning', id: 'rs_before_text', summary: [], encrypted_content: 'encrypted-before-text',
@@ -508,10 +566,8 @@ describe('structured Codex search protocol', () => {
       for (const event of pushed) yield event as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    const structured: CodexStructuredBlock[] = []
-    for await (const chunk of toStreamChunks(
-      eventSource(), model().contextWindow, block => { structured.push(block) },
-    )) chunks.push(chunk)
+    for await (const chunk of toStreamChunks(eventSource(), model().contextWindow)) chunks.push(chunk)
+    const structured = chunks.flatMap(chunk => structuredCodexChunkBlocks(chunk))
 
     expect(chunks.filter(chunk => chunk.type === 'usage')).toHaveLength(1)
     expect(chunks).not.toContainEqual({ type: 'block-start', index: 0, blockType: 'text' })
@@ -729,10 +785,8 @@ describe('structured Codex search protocol', () => {
       yield { type: 'error', reason: 'error', error: failure } as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    const lifecycle: CodexStructuredBlock[] = []
-    for await (const chunk of toStreamChunks(
-      events(), model().contextWindow, block => { lifecycle.push(block) },
-    )) chunks.push(chunk)
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+    const lifecycle = chunks.flatMap(chunk => structuredCodexChunkBlocks(chunk))
     expect(lifecycle).toEqual([search, { ...search, status: 'failed' }])
     expect(chunks.at(-1)).toEqual(expect.objectContaining({
       type: 'finish', reason: expect.objectContaining({ kind: 'error' }),
@@ -765,10 +819,8 @@ describe('structured Codex search protocol', () => {
       yield { type: 'error', reason: 'aborted', error: failure } as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    const lifecycle: CodexStructuredBlock[] = []
-    for await (const chunk of toStreamChunks(
-      events(), model().contextWindow, block => { lifecycle.push(block) },
-    )) chunks.push(chunk)
+    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
+    const lifecycle = chunks.flatMap(chunk => structuredCodexChunkBlocks(chunk))
     expect(lifecycle.map(block => block.type === 'codex-web-search' ? block.status : undefined))
       .toEqual(['in_progress'])
     expect(chunks.at(-1)).toEqual(expect.objectContaining({

@@ -9,11 +9,11 @@
  */
 
 import { CallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
-import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlockType, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toCodexReplayState } from './codex-replay.ts'
-import { foreignSourcesBlock } from './structured-search.ts'
+import { carryCodexStructuredBlocks, foreignSourcesBlock } from './structured-search.ts'
 import type {
   CodexPiResponseMessageContent,
   CodexPiWebSearchContent,
@@ -171,26 +171,68 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
 export async function* toStreamChunks(
   events: AsyncIterable<AssistantMessageEvent | CodexStructuredAssistantEvent>,
   contextWindow?: number,
-  onStructured?: (block: CodexStructuredBlock) => void,
 ): AsyncGenerator<StreamChunk> {
   // Preserve pi-ai contentIndex values for live block positions. DSH tolerates
   // gaps when an encrypted-only reasoning item is withheld from its renderer.
   const toolIds = new Map<number, { id: string; name: string }>()
   const openSearches = new Map<string, CodexWebSearchBlock>()
   const reasoning = new Map<number, PendingReasoning>()
+  const openBlocks = new Map<number, ContentBlockType>()
+  let pendingStructured: CodexStructuredBlock[] = []
+  let deferredEnds: StreamChunk[] = []
+
+  const carry = (chunk: StreamChunk): StreamChunk => {
+    const carried = carryCodexStructuredBlocks(chunk, pendingStructured)
+    pendingStructured = []
+    if (chunk.type === 'block-start') openBlocks.set(chunk.index, chunk.blockType)
+    if (chunk.type === 'block-end') openBlocks.delete(chunk.index)
+    return carried
+  }
+  // Hold a normal block's final edge until the next ordinary chunk. Hosted
+  // search events that arrive between those two provider items can then ride
+  // zero-length deltas on the still-open real block: live metadata, but no
+  // synthetic content block and therefore no empty Assistant layout row.
+  const emitNormal = (chunk: StreamChunk): StreamChunk[] => {
+    if (chunk.type === 'block-end') {
+      deferredEnds.push(chunk)
+      return []
+    }
+    const emitted = [...deferredEnds.map(carry), carry(chunk)]
+    deferredEnds = []
+    return emitted
+  }
+  const liveCarrier = (): StreamChunk | undefined => {
+    const current = [...openBlocks].at(-1)
+    if (current === undefined) return undefined
+    const [index, type] = current
+    switch (type) {
+      case 'text': return { type: 'text-delta', index, text: '' }
+      case 'reasoning': return { type: 'reasoning-delta', index, text: '' }
+      case 'tool-call': return {
+        type: 'tool-call-delta', index,
+        id: CallId(toolIds.get(index)?.id ?? ''),
+        argumentsDelta: '',
+      }
+      default: return undefined
+    }
+  }
+  const queueStructured = (block: CodexStructuredBlock): StreamChunk | undefined => {
+    pendingStructured.push(block)
+    return liveCarrier()
+  }
 
   for await (const event of events) {
     switch (event.type) {
       case 'start':
         break
       case 'text_start':
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
+        for (const chunk of emitNormal({ type: 'block-start', index: event.contentIndex, blockType: 'text' })) yield chunk
         break
       case 'text_delta':
-        yield { type: 'text-delta', index: event.contentIndex, text: event.delta }
+        for (const chunk of emitNormal({ type: 'text-delta', index: event.contentIndex, text: event.delta })) yield chunk
         break
       case 'text_end':
-        yield { type: 'block-end', index: event.contentIndex, block: { type: 'text', text: event.content } }
+        emitNormal({ type: 'block-end', index: event.contentIndex, block: { type: 'text', text: event.content } })
         break
       case 'thinking_start':
         reasoning.set(event.contentIndex, { buffered: '', visible: false })
@@ -200,19 +242,21 @@ export async function* toStreamChunks(
         state.buffered += event.delta
         reasoning.set(event.contentIndex, state)
         if (state.visible) {
-          yield { type: 'reasoning-delta', index: event.contentIndex, text: event.delta }
+          yield carry({ type: 'reasoning-delta', index: event.contentIndex, text: event.delta })
           break
         }
         if (state.buffered.trim() === '') break
         state.visible = true
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'reasoning' }
-        yield { type: 'reasoning-delta', index: event.contentIndex, text: state.buffered }
+        for (const chunk of emitNormal({ type: 'block-start', index: event.contentIndex, blockType: 'reasoning' })) yield chunk
+        for (const chunk of emitNormal({ type: 'reasoning-delta', index: event.contentIndex, text: state.buffered })) yield chunk
         break
       }
       case 'thinking_end': {
         const state = reasoning.get(event.contentIndex)
         reasoning.delete(event.contentIndex)
-        for (const chunk of closeReasoning(event.contentIndex, state, event.content)) yield chunk
+        for (const chunk of closeReasoning(event.contentIndex, state, event.content)) {
+          for (const emitted of emitNormal(chunk)) yield emitted
+        }
         break
       }
       case 'toolcall_start': {
@@ -221,22 +265,23 @@ export async function* toStreamChunks(
         const id = partial?.type === 'toolCall' ? partial.id : ''
         const name = partial?.type === 'toolCall' ? partial.name : ''
         toolIds.set(event.contentIndex, { id, name })
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
+        for (const chunk of emitNormal({ type: 'block-start', index: event.contentIndex, blockType: 'tool-call' })) yield chunk
         break
       }
       case 'toolcall_delta': {
         const known = toolIds.get(event.contentIndex)
-        yield {
+        const translated: StreamChunk = {
           type: 'tool-call-delta',
           index: event.contentIndex,
           id: CallId(known?.id ?? ''),
           ...known?.name !== undefined && known.name.length > 0 ? { name: known.name } : {},
           argumentsDelta: event.delta,
         }
+        for (const chunk of emitNormal(translated)) yield chunk
         break
       }
       case 'toolcall_end':
-        yield {
+        emitNormal({
           type: 'block-end',
           index: event.contentIndex,
           block: {
@@ -247,7 +292,7 @@ export async function* toStreamChunks(
             // keeps the raw string.
             arguments: JSON.stringify(event.toolCall.arguments),
           },
-        }
+        })
         break
       case 'codex_web_search_start': {
         const native = (event.partial.content as unknown[])[event.contentIndex] as {
@@ -259,7 +304,10 @@ export async function* toStreamChunks(
           ...native.action === undefined ? {} : { action: native.action },
         }
         openSearches.set(block.id, block)
-        onStructured?.(block)
+        {
+          const carrier = queueStructured(block)
+          if (carrier !== undefined) yield carry(carrier)
+        }
         break
       }
       case 'codex_web_search_end': {
@@ -270,7 +318,10 @@ export async function* toStreamChunks(
         const open = openSearches.get(block.id)
         if (open === undefined) throw new LlmError('Codex search end has no open record', 'PI_AI_ERROR')
         openSearches.delete(block.id)
-        onStructured?.(block)
+        {
+          const carrier = queueStructured(block)
+          if (carrier !== undefined) yield carry(carrier)
+        }
         break
       }
       case 'codex_web_search_update': {
@@ -280,7 +331,10 @@ export async function* toStreamChunks(
         }
         if (!openSearches.has(block.id)) throw new LlmError('Codex search update has no open record', 'PI_AI_ERROR')
         openSearches.set(block.id, block)
-        onStructured?.(block)
+        {
+          const carrier = queueStructured(block)
+          if (carrier !== undefined) yield carry(carrier)
+        }
         break
       }
       case 'codex_response_message': {
@@ -289,7 +343,8 @@ export async function* toStreamChunks(
           ...event.block.phase === undefined ? {} : { phase: event.block.phase },
           content: event.block.content,
         }
-        onStructured?.(block)
+        const carrier = queueStructured(block)
+        if (carrier !== undefined) yield carry(carrier)
         break
       }
       case 'done':
@@ -300,7 +355,9 @@ export async function* toStreamChunks(
               && (native.thinking.trim() !== '' || state.buffered.trim() === '')
               ? native.thinking
               : state.buffered
-            for (const chunk of closeReasoning(index, state, text)) yield chunk
+            for (const chunk of closeReasoning(index, state, text)) {
+              for (const emitted of emitNormal(chunk)) yield emitted
+            }
           }
           reasoning.clear()
           const structured = (event.message.content as unknown[])
@@ -309,16 +366,16 @@ export async function* toStreamChunks(
           const sources = foreignSourcesBlock(structured)
           if (sources !== undefined) {
             const index = event.message.content.length
-            yield { type: 'block-start', index, blockType: 'text' }
-            yield { type: 'text-delta', index, text: sources.type === 'text' ? sources.text : '' }
-            yield { type: 'block-end', index, block: sources }
+            for (const chunk of emitNormal({ type: 'block-start', index, blockType: 'text' })) yield chunk
+            for (const chunk of emitNormal({ type: 'text-delta', index, text: sources.type === 'text' ? sources.text : '' })) yield chunk
+            emitNormal({ type: 'block-end', index, block: sources })
           }
-        yield { type: 'usage', usage: mapUsage(event.message.usage) }
-        yield {
+        for (const chunk of emitNormal({ type: 'usage', usage: mapUsage(event.message.usage) })) yield chunk
+        for (const chunk of emitNormal({
           type: 'finish',
           reason: mapStopReason(event.message, contextWindow),
           replayState: toCodexReplayState(event.message, sources !== undefined),
-        }
+        })) yield chunk
         return
         }
       case 'error':
@@ -329,14 +386,16 @@ export async function* toStreamChunks(
               && (native.thinking.trim() !== '' || state.buffered.trim() === '')
               ? native.thinking
               : state.buffered
-            for (const chunk of closeReasoning(reasoningIndex, state, text)) yield chunk
+            for (const chunk of closeReasoning(reasoningIndex, state, text)) {
+              for (const emitted of emitNormal(chunk)) yield emitted
+            }
           }
           reasoning.clear()
           const failedSearches = event.error.stopReason === 'aborted'
             ? []
             : [...openSearches.values()].map(search => ({ ...search, status: 'failed' as const }))
           for (const search of failedSearches) {
-            onStructured?.(search)
+            queueStructured(search)
           }
           const replayMessage: AssistantMessage = failedSearches.length === 0
             ? event.error
@@ -347,12 +406,12 @@ export async function* toStreamChunks(
                 ...failedSearches.map(search => ({ ...search, type: 'codexWebSearch' as const })),
               ],
             } as unknown as AssistantMessage
-          yield { type: 'usage', usage: mapUsage(event.error.usage) }
-          yield {
+          for (const chunk of emitNormal({ type: 'usage', usage: mapUsage(event.error.usage) })) yield chunk
+          for (const chunk of emitNormal({
             type: 'finish',
             reason: mapStopReason(event.error, contextWindow),
             replayState: toCodexReplayState(replayMessage, false),
-          }
+          })) yield chunk
         }
         return
       // no default: AssistantMessageEvent is pi-ai's closed union; a new

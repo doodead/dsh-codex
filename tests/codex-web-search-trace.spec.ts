@@ -43,7 +43,7 @@ describe('Codex web-search wire trace', () => {
     expect(JSON.parse(line)).toEqual({
       timestamp: expect.any(String),
       package: 'dsh-codex-experiment',
-      version: '0.2.8',
+      version: '0.2.9',
       transport: 'websocket',
       event,
     })

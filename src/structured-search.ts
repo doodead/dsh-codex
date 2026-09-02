@@ -1,8 +1,8 @@
 /** Structured Codex hosted-search data preserved through stock DSH seams. */
 
-import type { ContentBlock, TextBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, StreamChunk, TextBlock } from '@deepseek-ai/dsh-llm'
 
-/** Durable, non-content session event used for live hosted-search rendering. */
+/** Legacy 0.2.8 event name retained so repaired histories still render. */
 export const OPENAI_CODEX_STRUCTURED_EVENT = 'llm/openai-codex-structured'
 
 export const CODEX_WEB_SEARCH_STATUSES = [
@@ -68,6 +68,13 @@ export type CodexStructuredBlock = CodexWebSearchBlock | CodexResponseMessageBlo
 export type CodexStructuredFrame =
   | { readonly version: 1; readonly kind: 'web-search'; readonly block: CodexWebSearchBlock }
   | { readonly version: 1; readonly kind: 'response-message'; readonly block: CodexResponseMessageBlock }
+
+/** Extra JSON field carried by an ordinary DSH stream chunk. */
+export interface CodexStructuredChunkMetadata {
+  readonly codexStructured?: readonly CodexStructuredFrame[]
+}
+
+export type CodexStructuredStreamChunk = StreamChunk & CodexStructuredChunkMetadata
 
 declare module '@deepseek-ai/dsh-llm' {
   interface TextBlock {
@@ -298,6 +305,31 @@ export function codexStructuredFrame(block: CodexStructuredBlock): CodexStructur
   return block.type === 'codex-web-search'
     ? { version: 1, kind: 'web-search', block }
     : { version: 1, kind: 'response-message', block }
+}
+
+/**
+ * Attach pending structured records to a standard DSH chunk. The chunk keeps
+ * its ordinary discriminant and semantics, so core assemblers and persistence
+ * readers need no plugin-owned event vocabulary.
+ */
+export function carryCodexStructuredBlocks(
+  chunk: StreamChunk,
+  blocks: readonly CodexStructuredBlock[],
+): StreamChunk {
+  if (blocks.length === 0) return chunk
+  return {
+    ...chunk,
+    codexStructured: blocks.map(codexStructuredFrame),
+  } as CodexStructuredStreamChunk
+}
+
+/** Read and validate structured records attached to one standard DSH chunk. */
+export function structuredCodexChunkBlocks(value: unknown): readonly CodexStructuredBlock[] {
+  const chunk = record(value)
+  const frames = chunk?.['codexStructured']
+  if (frames === undefined) return []
+  if (!Array.isArray(frames)) throw new TypeError('Codex structured chunk metadata is malformed')
+  return frames.map(frame => parseCodexStructuredFrame(frame).block)
 }
 
 /** Build a legacy empty-text frame for reading and testing old sessions. */

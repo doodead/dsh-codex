@@ -22,14 +22,6 @@ import { ImageToolPolicy } from './tool-policy.ts'
 import type { NativeWebSearchContextSize, NativeWebSearchMode } from './native-web-search.ts'
 import { FastModeRegistry } from './fast-mode.ts'
 import { assertNoOpenAICodexProviderConflict } from './doctor.ts'
-import {
-  installOpenAICodexSearchEvent,
-  recordOpenAICodexSearchRequest,
-} from './search-event.ts'
-import {
-  installOpenAICodexStructuredEvent,
-  recordOpenAICodexStructuredBlock,
-} from './structured-search-event.ts'
 
 export { READ_IMAGE_TOOL_NAME } from './read-image-enhancement.ts'
 export {
@@ -74,11 +66,7 @@ export type {
   OpenAICodexRateLimitWindow,
   OpenAICodexUsage,
 } from './usage.ts'
-export {
-  installOpenAICodexSearchEvent,
-  OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
-  recordOpenAICodexSearchRequest,
-} from './search-event.ts'
+export { OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT } from './search-event.ts'
 import {
   DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
   DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS,
@@ -192,8 +180,6 @@ export const Config: z<Config> = z.object({
  * @param config - standalone-search model, access mode, context size, and output budget.
  */
 export function apply(ctx: Context, config: Config): void {
-  installOpenAICodexSearchEvent()
-  installOpenAICodexStructuredEvent()
   const service = new OpenAICodexService({
     ...config.models === undefined ? {} : { models: config.models },
     modelCatalog: openAICodexModelCatalog(),
@@ -220,7 +206,6 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.responseApiSnapshot(),
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
-      block => { recordOpenAICodexStructuredBlock(ctx, block) },
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
@@ -230,7 +215,6 @@ export function apply(ctx: Context, config: Config): void {
     contextSize: config.searchContextSize ?? DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
     maxOutputTokens: config.searchMaxOutputTokens ?? DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS,
     resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
-    recordRequest: request => { recordOpenAICodexSearchRequest(ctx, request) },
   }))
   ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(
     webCtx,
