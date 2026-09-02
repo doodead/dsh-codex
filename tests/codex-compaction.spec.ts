@@ -14,7 +14,7 @@ import {
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
-import { structuredCodexBlock } from '../src/structured-search.ts'
+import { structuredCodexReplayBlocks } from '../src/structured-search.ts'
 
 let context: Context | undefined
 let root: string | undefined
@@ -189,7 +189,8 @@ describe('OpenAI Codex compaction request', () => {
     }).content
     expect(compactedContent.filter(block => block.type !== 'text' || block.text !== ''))
       .toEqual([{ type: 'text', text: 'summary' }])
-    expect(compactedContent.map(structuredCodexBlock).filter(Boolean)).toEqual([
+    expect(compactedContent.some(block => block.type === 'text' && block.text === '')).toBe(false)
+    expect(structuredCodexReplayBlocks(assembler.replayState)).toEqual([
       expect.objectContaining({ type: 'codex-response-message', id: 'msg_compaction' }),
     ])
     if (request === undefined) throw new Error('Codex request was not captured')
@@ -385,7 +386,8 @@ describe('OpenAI Codex compaction request', () => {
     }).content
     expect(fallbackContent.filter(block => block.type !== 'text' || block.text !== ''))
       .toEqual([{ type: 'text', text: 'fallback summary' }])
-    expect(fallbackContent.map(structuredCodexBlock).filter(Boolean)).toEqual([
+    expect(fallbackContent.some(block => block.type === 'text' && block.text === '')).toBe(false)
+    expect(structuredCodexReplayBlocks(assembler.replayState)).toEqual([
       expect.objectContaining({ type: 'codex-response-message', id: 'msg_compaction' }),
     ])
     expect(requests.map(request => request.url)).toEqual([

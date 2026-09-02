@@ -14,7 +14,9 @@ import {
   parseCodexResponseMessageBlock,
   parseCodexWebSearchBlock,
   structuredCodexBlock,
+  structuredCodexReplayBlocks,
 } from '../src/structured-search.ts'
+import type { CodexStructuredBlock } from '../src/structured-search.ts'
 import { processStructuredResponsesStream } from '../src/vendor/pi-ai/process-structured-responses.ts'
 
 function model() {
@@ -218,24 +220,25 @@ describe('structured Codex search protocol', () => {
     const replayState = toCodexReplayState(output, false)
     const stored = {
       role: 'assistant',
-      content: searches.map(framedCodexBlock),
+      content: [],
       source: {
         kind: 'model', provider: output.provider, model: output.model, replayState,
       },
     } as unknown as Message
 
     expect(replayState).toEqual(expect.objectContaining({
-      blocks: [
-        expect.objectContaining({
-          type: 'codex-web-search',
-          leadingReasoning: [{ thinkingSignature: JSON.stringify(before) }],
-        }),
-        expect.objectContaining({ type: 'codex-web-search' }),
-        expect.objectContaining({
-          type: 'codex-web-search',
-          trailingReasoning: [{ thinkingSignature: JSON.stringify(after) }],
-        }),
-      ],
+      response: expect.objectContaining({
+        version: 2,
+        blockTypes: [],
+        detached: [
+          { position: 0, item: { type: 'reasoning', thinkingSignature: JSON.stringify(before) } },
+          ...searches.map(block => ({
+            position: 0, item: { type: 'codex-web-search' as const, block },
+          })),
+          { position: 0, item: { type: 'reasoning', thinkingSignature: JSON.stringify(after) } },
+        ],
+      }),
+      blocks: [],
     }))
     const replayed = toCodexAssistant(JSON.parse(JSON.stringify(stored)) as Message)
     const exact = expandCodexReplayMarkers(convertResponsesMessages(
@@ -302,10 +305,13 @@ describe('structured Codex search protocol', () => {
 
     expect(stored.content).toEqual([{ type: 'text', text: 'answer' }])
     expect(assembler.replayState).toEqual(expect.objectContaining({
-      blocks: [{
-        type: 'text', textSignature: 'text-signature',
-        leadingReasoning: [{ thinkingSignature: JSON.stringify(reasoningItem) }],
-      }],
+      response: expect.objectContaining({
+        detached: [{
+          position: 0,
+          item: { type: 'reasoning', thinkingSignature: JSON.stringify(reasoningItem) },
+        }],
+      }),
+      blocks: [{ type: 'text', textSignature: 'text-signature', ordinal: 0 }],
     }))
     expect(toCodexAssistant(stored).content).toEqual([
       { type: 'thinking', thinking: '', thinkingSignature: JSON.stringify(reasoningItem) },
@@ -335,6 +341,52 @@ describe('structured Codex search protocol', () => {
 
     expect(assembler.blocks()).toEqual([])
     expect(assembler.replayState).toEqual(expect.objectContaining({ blocks: [] }))
+    const stored = assembler.message({
+      kind: 'model', provider: output.provider, model: output.model,
+      replayState: assembler.replayState,
+    } as never)
+    expect(toCodexAssistant(stored).content).toEqual([])
+  })
+
+  it('keeps detached search replay while pruning a later max-token tool call', () => {
+    const search = parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'ws_before_pruned_tool', status: 'completed',
+      action: { type: 'search', query: 'retained search' },
+    })
+    const output = emptyAssistant()
+    output.stopReason = 'length'
+    ;(output.content as unknown[]).push(
+      { ...search, type: 'codexWebSearch' },
+      {
+        type: 'thinking', thinking: '',
+        thinkingSignature: '{"type":"reasoning","id":"rs_pruned_tool"}',
+      },
+      { type: 'toolCall', id: 'call_pruned|fc_pruned', name: 'inspect', arguments: {} },
+    )
+    const assembler = new BlockAssembler()
+    assembler.push({ type: 'block-start', index: 2, blockType: 'tool-call' })
+    assembler.push({
+      type: 'block-end', index: 2,
+      block: { type: 'tool-call', id: 'call_pruned|fc_pruned' as never, name: 'inspect', arguments: '{}' },
+    })
+    assembler.push({
+      type: 'finish', reason: { kind: 'max-tokens' },
+      replayState: toCodexReplayState(output, false),
+    })
+    const stored = assembler.message({
+      kind: 'model', provider: output.provider, model: output.model,
+      replayState: assembler.replayState,
+    } as never)
+    expect(stored.content).toEqual([])
+    const exact = expandCodexReplayMarkers(convertResponsesMessages(
+      model(), { messages: [toCodexAssistant(stored)] }, new Set(['openai-codex']),
+      { includeSystemPrompt: false },
+    ))
+    expect(exact).toEqual([
+      expect.objectContaining({
+        type: 'web_search_call', id: 'ws_before_pruned_tool', status: 'completed',
+      }),
+    ])
   })
 
   it('closes interrupted empty reasoning invisibly with aligned replay', async () => {
@@ -354,7 +406,9 @@ describe('structured Codex search protocol', () => {
 
     expect(assembler.blocks()).toEqual([])
     expect(assembler.replayState).toEqual(expect.objectContaining({
-      response: expect.objectContaining({ trailingReasoning: [{}] }),
+      response: expect.objectContaining({
+        detached: [{ position: 0, item: { type: 'reasoning' } }],
+      }),
       blocks: [],
     }))
   })
@@ -454,21 +508,24 @@ describe('structured Codex search protocol', () => {
       for (const event of pushed) yield event as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    for await (const chunk of toStreamChunks(eventSource(), model().contextWindow)) chunks.push(chunk)
+    const structured: CodexStructuredBlock[] = []
+    for await (const chunk of toStreamChunks(
+      eventSource(), model().contextWindow, block => { structured.push(block) },
+    )) chunks.push(chunk)
 
-    expect(chunks).toContainEqual({ type: 'block-start', index: 0, blockType: 'text' })
-    const searches = chunks.flatMap(chunk => {
-      if (chunk.type !== 'block-end') return []
-      const structured = structuredCodexBlock(chunk.block)
-      return structured?.type === 'codex-web-search' ? [structured] : []
-    })
+    expect(chunks.filter(chunk => chunk.type === 'usage')).toHaveLength(1)
+    expect(chunks).not.toContainEqual({ type: 'block-start', index: 0, blockType: 'text' })
+    const searches = structured.filter(
+      (block): block is Extract<CodexStructuredBlock, { type: 'codex-web-search' }> =>
+        block.type === 'codex-web-search',
+    )
     expect(searches.map(search => search.status)).toEqual(['in_progress', 'searching', 'completed'])
     expect(chunks).toContainEqual(expect.objectContaining({
       type: 'block-end', index: 3,
       block: expect.objectContaining({ type: 'tool-call', id: expect.stringContaining('call_1'), name: 'inspect' }),
     }))
-    const messageEnd = chunks.find(chunk => chunk.type === 'block-end' && chunk.index === 5)
-    expect(messageEnd?.type === 'block-end' ? structuredCodexBlock(messageEnd.block) : undefined)
+    const messageEnd = structured.find(block => block.type === 'codex-response-message')
+    expect(messageEnd)
       .toEqual(expect.objectContaining({ type: 'codex-response-message', id: 'msg_1' }))
     expect(chunks).toContainEqual(expect.objectContaining({
       type: 'block-end', index: 6,
@@ -481,6 +538,16 @@ describe('structured Codex search protocol', () => {
       kind: 'model', provider: output.provider, model: output.model,
       replayState: assembler.replayState,
     } as never)
+    expect(stored.content).toEqual([
+      expect.objectContaining({ type: 'tool-call' }),
+      { type: 'text', text: 'Answer.' },
+      expect.objectContaining({ type: 'text', text: expect.stringContaining('### Sources') }),
+    ])
+    expect(stored.content.some(block => block.type === 'text' && block.text === '')).toBe(false)
+    expect(structuredCodexReplayBlocks(assembler.replayState)).toEqual([
+      ...searches,
+      expect.objectContaining({ type: 'codex-response-message', id: 'msg_1' }),
+    ])
     const reloaded = JSON.parse(JSON.stringify(stored)) as Message
     const forked = structuredClone(reloaded)
     const replayed = toCodexAssistant(forked)
@@ -598,6 +665,35 @@ describe('structured Codex search protocol', () => {
       type: 'thinking', thinking: '',
       thinkingSignature: '{"type":"reasoning","id":"legacy-empty","summary":[]}',
     }])
+
+    const legacySearch = parseCodexWebSearchBlock({
+      type: 'web_search_call', id: 'legacy-search', status: 'completed',
+      action: { type: 'search', query: 'legacy' },
+    })
+    const legacyStructured = {
+      role: 'assistant',
+      content: [framedCodexBlock(legacySearch)],
+      source: {
+        kind: 'model', provider: 'openai-codex', model: model().id,
+        replayState: {
+          response: {
+            kind: 'dsh-codex-pi-ai', version: 1, api: 'openai-codex-responses',
+            provider: 'openai-codex', model: model().id, stopReason: 'stop',
+          },
+          blocks: [{ type: 'codex-web-search', block: legacySearch }],
+        },
+      },
+    } as unknown as Message
+    expect(structuredCodexReplayBlocks(
+      legacyStructured.source.kind === 'model' ? legacyStructured.source.replayState : undefined,
+    )).toEqual([legacySearch])
+    const exactLegacy = expandCodexReplayMarkers(convertResponsesMessages(
+      model(), { messages: [toCodexAssistant(legacyStructured)] }, new Set(['openai-codex']),
+      { includeSystemPrompt: false },
+    ))
+    expect(exactLegacy).toEqual([expect.objectContaining({
+      type: 'web_search_call', id: 'legacy-search', status: 'completed',
+    })])
   })
 
   it('drops invisible structured frames from provider-neutral replay', () => {
@@ -633,20 +729,21 @@ describe('structured Codex search protocol', () => {
       yield { type: 'error', reason: 'error', error: failure } as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
-    const lifecycle = chunks.flatMap(chunk => {
-      if (chunk.type !== 'block-end') return []
-      const structured = structuredCodexBlock(chunk.block)
-      return structured?.type === 'codex-web-search' ? [structured] : []
-    })
+    const lifecycle: CodexStructuredBlock[] = []
+    for await (const chunk of toStreamChunks(
+      events(), model().contextWindow, block => { lifecycle.push(block) },
+    )) chunks.push(chunk)
     expect(lifecycle).toEqual([search, { ...search, status: 'failed' }])
     expect(chunks.at(-1)).toEqual(expect.objectContaining({
       type: 'finish', reason: expect.objectContaining({ kind: 'error' }),
       replayState: expect.objectContaining({
-        blocks: [
-          expect.objectContaining({ type: 'codex-web-search' }),
-          expect.objectContaining({ type: 'codex-web-search' }),
-        ],
+        response: expect.objectContaining({
+          detached: [
+            expect.objectContaining({ item: expect.objectContaining({ type: 'codex-web-search' }) }),
+            expect.objectContaining({ item: expect.objectContaining({ type: 'codex-web-search' }) }),
+          ],
+        }),
+        blocks: [],
       }),
     }))
 
@@ -668,25 +765,23 @@ describe('structured Codex search protocol', () => {
       yield { type: 'error', reason: 'aborted', error: failure } as AssistantMessageEvent
     }
     const chunks: StreamChunk[] = []
-    for await (const chunk of toStreamChunks(events(), model().contextWindow)) chunks.push(chunk)
-    const lifecycle = chunks.flatMap(chunk => {
-      if (chunk.type !== 'block-end') return []
-      const structured = structuredCodexBlock(chunk.block)
-      return structured?.type === 'codex-web-search' ? [structured.status] : []
-    })
-    expect(lifecycle).toEqual(['in_progress'])
+    const lifecycle: CodexStructuredBlock[] = []
+    for await (const chunk of toStreamChunks(
+      events(), model().contextWindow, block => { lifecycle.push(block) },
+    )) chunks.push(chunk)
+    expect(lifecycle.map(block => block.type === 'codex-web-search' ? block.status : undefined))
+      .toEqual(['in_progress'])
     expect(chunks.at(-1)).toEqual(expect.objectContaining({
       type: 'finish', reason: expect.objectContaining({ kind: 'aborted' }),
       replayState: expect.objectContaining({
-        blocks: [expect.objectContaining({ type: 'codex-web-search' })],
+        response: expect.objectContaining({
+          detached: [expect.objectContaining({
+            item: expect.objectContaining({ type: 'codex-web-search' }),
+          })],
+        }),
+        blocks: [],
       }),
     }))
   })
 
-  it('keeps structured framing invisible to the stock assistant renderer', () => {
-    expect(framedCodexBlock(parseCodexWebSearchBlock({
-      type: 'web_search_call', id: 'hidden', status: 'completed',
-      action: { type: 'search', query: 'hidden' },
-    }))).toMatchObject({ type: 'text', text: '' })
-  })
 })

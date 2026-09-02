@@ -2,6 +2,9 @@
 
 import type { ContentBlock, TextBlock } from '@deepseek-ai/dsh-llm'
 
+/** Durable, non-content session event used for live hosted-search rendering. */
+export const OPENAI_CODEX_STRUCTURED_EVENT = 'llm/openai-codex-structured'
+
 export const CODEX_WEB_SEARCH_STATUSES = [
   'in_progress',
   'searching',
@@ -68,8 +71,19 @@ export type CodexStructuredFrame =
 
 declare module '@deepseek-ai/dsh-llm' {
   interface TextBlock {
-    /** Invisible, schema-validated provider metadata carried beside empty text. */
+    /** Legacy 0.2.6/0.2.7 framing retained only for reading old sessions. */
     readonly codexStructured?: CodexStructuredFrame
+  }
+}
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    /** One schema-framed Codex Responses record associated with an open step. */
+    'llm/openai-codex-structured': {
+      turn: number
+      step: number
+      frame: CodexStructuredFrame
+    }
   }
 }
 
@@ -280,12 +294,15 @@ export function parseCodexStructuredFrame(value: unknown): CodexStructuredFrame 
   }
 }
 
-/** Carry one structured record without producing visible assistant prose. */
-export function framedCodexBlock(block: CodexStructuredBlock): TextBlock {
-  const frame: CodexStructuredFrame = block.type === 'codex-web-search'
+export function codexStructuredFrame(block: CodexStructuredBlock): CodexStructuredFrame {
+  return block.type === 'codex-web-search'
     ? { version: 1, kind: 'web-search', block }
     : { version: 1, kind: 'response-message', block }
-  return { type: 'text', text: '', codexStructured: frame }
+}
+
+/** Build a legacy empty-text frame for reading and testing old sessions. */
+export function framedCodexBlock(block: CodexStructuredBlock): TextBlock {
+  return { type: 'text', text: '', codexStructured: codexStructuredFrame(block) }
 }
 
 /** Read and validate structured metadata from one otherwise-empty text block. */
@@ -293,6 +310,68 @@ export function structuredCodexBlock(block: ContentBlock): CodexStructuredBlock 
   if (block.type !== 'text' || block.codexStructured === undefined) return undefined
   if (block.text !== '') throw new TypeError('Codex structured framing must not contain visible text')
   return parseCodexStructuredFrame(block.codexStructured).block
+}
+
+/**
+ * Read structured records from either current detached replay metadata or the
+ * legacy per-block representation. This parser has no client runtime imports.
+ */
+export function structuredCodexReplayBlocks(value: unknown): readonly CodexStructuredBlock[] {
+  const envelope = record(value)
+  const response = record(envelope?.['response'])
+  if (response?.['kind'] !== 'dsh-codex-pi-ai') return []
+  if (response['version'] === 2) {
+    const blockTypes = response['blockTypes']
+    if (!Array.isArray(blockTypes)) throw new TypeError('Codex replay block layout is malformed')
+    const detached = response['detached']
+    if (!Array.isArray(detached)) throw new TypeError('Codex detached replay metadata is malformed')
+    const result: CodexStructuredBlock[] = []
+    let previousPosition = -1
+    for (const rawEntry of detached) {
+      const entry = record(rawEntry)
+      const position = entry?.['position']
+      if (!Number.isSafeInteger(position)
+        || (position as number) < 0
+        || (position as number) > blockTypes.length
+        || (position as number) < previousPosition) {
+        throw new TypeError('Codex detached replay position is malformed')
+      }
+      previousPosition = position as number
+      const item = record(entry?.['item'])
+      switch (item?.['type']) {
+        case 'reasoning': break
+        case 'codex-web-search':
+          result.push(parseCodexStructuredFrame({
+            version: 1, kind: 'web-search', block: item['block'],
+          }).block)
+          break
+        case 'codex-response-message':
+          result.push(parseCodexStructuredFrame({
+            version: 1, kind: 'response-message', block: item['block'],
+          }).block)
+          break
+        default: throw new TypeError('Codex detached replay item is malformed')
+      }
+    }
+    return result
+  }
+  if (response['version'] !== 1) throw new TypeError('unsupported Codex replay metadata version')
+  const blocks = envelope?.['blocks']
+  if (!Array.isArray(blocks)) throw new TypeError('Codex legacy replay metadata is malformed')
+  const result: CodexStructuredBlock[] = []
+  for (const rawBlock of blocks) {
+    const block = record(rawBlock)
+    if (block?.['type'] === 'codex-web-search') {
+      result.push(parseCodexStructuredFrame({
+        version: 1, kind: 'web-search', block: block['block'],
+      }).block)
+    } else if (block?.['type'] === 'codex-response-message') {
+      result.push(parseCodexStructuredFrame({
+        version: 1, kind: 'response-message', block: block['block'],
+      }).block)
+    }
+  }
+  return result
 }
 
 export function encodeCodexReplayMarker(marker: CodexReplayMarker): string {

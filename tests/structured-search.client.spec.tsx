@@ -10,7 +10,11 @@ import {
 } from '../src/client/CodexWebSearchNode.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import type { OpenAICodexSettingsKey } from '../src/client/locales.ts'
-import { framedCodexBlock } from '../src/structured-search.ts'
+import {
+  codexStructuredFrame,
+  framedCodexBlock,
+  OPENAI_CODEX_STRUCTURED_EVENT,
+} from '../src/structured-search.ts'
 import { inject as clientInject } from '../src/client/index.tsx'
 
 function t(key: OpenAICodexSettingsKey, values?: Record<string, unknown>): string {
@@ -43,15 +47,12 @@ describe('Codex hosted-search conversation row', () => {
       matches: [start], start, state: undefined, current: new Map(),
     }
     const state = codexWebSearchDefinition.start(context, start, { previous: () => undefined })
-    const began = match(event('assistant/chunk', {
+    const began = match(event(OPENAI_CODEX_STRUCTURED_EVENT, {
       turn: 1, step: 2,
-      chunk: {
-        type: 'block-end', index: 0,
-        block: framedCodexBlock({
-          type: 'codex-web-search', id: 'ws-1', status: 'in_progress',
-          action: { type: 'search', query: 'dsh', queries: ['dsh'] },
-        }),
-      },
+      frame: codexStructuredFrame({
+        type: 'codex-web-search', id: 'ws-1', status: 'in_progress',
+        action: { type: 'search', query: 'dsh', queries: ['dsh'] },
+      }),
     }, 2), 'update', openLocation)
     const runningState = codexWebSearchDefinition.update(
       { ...context, state, matches: [start, began] },
@@ -64,21 +65,46 @@ describe('Codex hosted-search conversation row', () => {
 
     const completed = match(event('assistant/message', {
       turn: 1, step: 2,
-      message: { content: [
-        framedCodexBlock({
-          type: 'codex-web-search', id: 'ws-1', status: 'completed',
-          action: { type: 'search', query: 'dsh', queries: ['dsh'] },
-        }),
-        framedCodexBlock({
-          type: 'codex-response-message', id: 'msg-1', status: 'completed',
-          content: [{
-            type: 'output_text', text: 'answer', annotations: [{
-              type: 'url_citation', startIndex: 0, endIndex: 6,
-              title: 'Example', url: 'https://example.com',
-            }],
-          }],
-        }),
-      ] },
+      message: {
+        content: [],
+        source: {
+          kind: 'model', provider: 'openai-codex', model: 'gpt-test',
+          replayState: {
+            response: {
+              kind: 'dsh-codex-pi-ai', version: 2, api: 'openai-codex-responses',
+              provider: 'openai-codex', model: 'gpt-test', stopReason: 'stop', blockTypes: [],
+              detached: [
+                {
+                  position: 0,
+                  item: {
+                    type: 'codex-web-search',
+                    block: {
+                      type: 'codex-web-search', id: 'ws-1', status: 'completed',
+                      action: { type: 'search', query: 'dsh', queries: ['dsh'] },
+                    },
+                  },
+                },
+                {
+                  position: 0,
+                  item: {
+                    type: 'codex-response-message',
+                    block: {
+                      type: 'codex-response-message', id: 'msg-1', status: 'completed',
+                      content: [{
+                        type: 'output_text', text: 'answer', annotations: [{
+                          type: 'url_citation', startIndex: 0, endIndex: 6,
+                          title: 'Example', url: 'https://example.com',
+                        }],
+                      }],
+                    },
+                  },
+                },
+              ],
+            },
+            blocks: [],
+          },
+        },
+      },
     }, 3), 'update', openLocation)
     const settledState = codexWebSearchDefinition.update(
       { ...context, state: runningState, matches: [start, began, completed] },
@@ -208,11 +234,11 @@ describe('Codex hosted-search conversation row', () => {
     expect(clientInject).not.toContain('conversationEvents')
   })
 
-  it('uses empty standard text blocks for invisible framing', () => {
-    const framed = framedCodexBlock({
+  it('uses non-content session events for live framing', () => {
+    const framed = codexStructuredFrame({
       type: 'codex-web-search', id: 'hidden', status: 'completed',
       action: { type: 'search', query: 'hidden' },
     })
-    expect(framed).toMatchObject({ type: 'text', text: '' })
+    expect(framed).toMatchObject({ version: 1, kind: 'web-search' })
   })
 })

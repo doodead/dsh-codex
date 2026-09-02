@@ -13,7 +13,7 @@ import type { FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm
 import { isContextOverflow } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toCodexReplayState } from './codex-replay.ts'
-import { foreignSourcesBlock, framedCodexBlock } from './structured-search.ts'
+import { foreignSourcesBlock } from './structured-search.ts'
 import type {
   CodexPiResponseMessageContent,
   CodexPiWebSearchContent,
@@ -171,6 +171,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
 export async function* toStreamChunks(
   events: AsyncIterable<AssistantMessageEvent | CodexStructuredAssistantEvent>,
   contextWindow?: number,
+  onStructured?: (block: CodexStructuredBlock) => void,
 ): AsyncGenerator<StreamChunk> {
   // Preserve pi-ai contentIndex values for live block positions. DSH tolerates
   // gaps when an encrypted-only reasoning item is withheld from its renderer.
@@ -257,10 +258,8 @@ export async function* toStreamChunks(
           type: 'codex-web-search', id: native.id, status: native.status,
           ...native.action === undefined ? {} : { action: native.action },
         }
-        const frame = framedCodexBlock(block)
         openSearches.set(block.id, block)
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
-        yield { type: 'block-end', index: event.contentIndex, block: frame }
+        onStructured?.(block)
         break
       }
       case 'codex_web_search_end': {
@@ -271,9 +270,7 @@ export async function* toStreamChunks(
         const open = openSearches.get(block.id)
         if (open === undefined) throw new LlmError('Codex search end has no open record', 'PI_AI_ERROR')
         openSearches.delete(block.id)
-        const frame = framedCodexBlock(block)
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
-        yield { type: 'block-end', index: event.contentIndex, block: frame }
+        onStructured?.(block)
         break
       }
       case 'codex_web_search_update': {
@@ -283,19 +280,16 @@ export async function* toStreamChunks(
         }
         if (!openSearches.has(block.id)) throw new LlmError('Codex search update has no open record', 'PI_AI_ERROR')
         openSearches.set(block.id, block)
-        const frame = framedCodexBlock(block)
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
-        yield { type: 'block-end', index: event.contentIndex, block: frame }
+        onStructured?.(block)
         break
       }
       case 'codex_response_message': {
-        const block = framedCodexBlock({
+        const block: CodexStructuredBlock = {
           type: 'codex-response-message', id: event.block.id, status: event.block.status,
           ...event.block.phase === undefined ? {} : { phase: event.block.phase },
           content: event.block.content,
-        })
-        yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
-        yield { type: 'block-end', index: event.contentIndex, block }
+        }
+        onStructured?.(block)
         break
       }
       case 'done':
@@ -338,15 +332,11 @@ export async function* toStreamChunks(
             for (const chunk of closeReasoning(reasoningIndex, state, text)) yield chunk
           }
           reasoning.clear()
-          let index = event.error.content.length
           const failedSearches = event.error.stopReason === 'aborted'
             ? []
             : [...openSearches.values()].map(search => ({ ...search, status: 'failed' as const }))
           for (const search of failedSearches) {
-            const frame = framedCodexBlock(search)
-            yield { type: 'block-start', index, blockType: 'text' }
-            yield { type: 'block-end', index, block: frame }
-            index += 1
+            onStructured?.(search)
           }
           const replayMessage: AssistantMessage = failedSearches.length === 0
             ? event.error

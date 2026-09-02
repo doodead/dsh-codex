@@ -26,6 +26,10 @@ import {
   installOpenAICodexSearchEvent,
   recordOpenAICodexSearchRequest,
 } from './search-event.ts'
+import {
+  installOpenAICodexStructuredEvent,
+  recordOpenAICodexStructuredBlock,
+} from './structured-search-event.ts'
 
 export { READ_IMAGE_TOOL_NAME } from './read-image-enhancement.ts'
 export {
@@ -189,6 +193,7 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
+  installOpenAICodexStructuredEvent()
   const service = new OpenAICodexService({
     ...config.models === undefined ? {} : { models: config.models },
     modelCatalog: openAICodexModelCatalog(),
@@ -215,6 +220,7 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.responseApiSnapshot(),
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
+      block => { recordOpenAICodexStructuredBlock(ctx, block) },
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({

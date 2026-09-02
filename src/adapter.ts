@@ -20,6 +20,7 @@ import type { FastModeRegistry } from './fast-mode.ts'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { toPiContext } from './codex-context.ts'
 import { toStreamChunks } from './codex-stream.ts'
+import type { CodexStructuredBlock } from './structured-search.ts'
 import {
   stream as structuredCodexStream,
   streamSimple as structuredCodexStreamSimple,
@@ -177,6 +178,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
     private readonly provider: Provider,
     private readonly resolveAttachments: () => AttachmentStore | undefined,
     private readonly visibleModelIds?: () => readonly string[],
+    private readonly recordStructured?: (block: CodexStructuredBlock) => void,
   ) {
     super(options)
   }
@@ -245,7 +247,11 @@ class OpenAICodexAdapter extends PiAiAdapter {
           headers: requestHeaders(),
           maxRetries: 0,
         })
-        const iterator = toStreamChunks(events as never, model.contextWindow)[Symbol.asyncIterator]()
+        const iterator = toStreamChunks(
+          events as never,
+          model.contextWindow,
+          this.recordStructured,
+        )[Symbol.asyncIterator]()
         let exhausted = false
         try {
           while (true) {
@@ -295,6 +301,7 @@ export function createOpenAICodexAdapter(
   responsePreferences: () => ResponseApiPreferences,
   fastMode?: FastModeRegistry,
   visibleModelIds?: () => readonly string[],
+  recordStructured?: (block: CodexStructuredBlock) => void,
 ): PiAiAdapter {
   const provider = structuredProvider(openaiCodexProvider())
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
@@ -316,5 +323,6 @@ export function createOpenAICodexAdapter(
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
     auth: { credentials, authContext: defaultProviderAuthContext() },
     resolveAttachments,
-  }, responses, models, profiles.get(OPENAI_CODEX_PROVIDER)?.piProvider ?? provider, resolveAttachments, visibleModelIds)
+  }, responses, models, profiles.get(OPENAI_CODEX_PROVIDER)?.piProvider ?? provider,
+  resolveAttachments, visibleModelIds, recordStructured)
 }

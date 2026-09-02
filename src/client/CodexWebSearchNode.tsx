@@ -10,11 +10,18 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ReactNode } from 'react'
 import type {
   CodexResponseMessageBlock,
+  CodexStructuredBlock,
   CodexUrlCitation,
   CodexWebSearchAction,
   CodexWebSearchBlock,
 } from '../structured-search.ts'
-import { isSafeHttpUrl, structuredCodexBlock } from '../structured-search.ts'
+import {
+  isSafeHttpUrl,
+  OPENAI_CODEX_STRUCTURED_EVENT,
+  parseCodexStructuredFrame,
+  structuredCodexBlock,
+  structuredCodexReplayBlocks,
+} from '../structured-search.ts'
 
 export interface CodexWebSearchCallView {
   readonly key: string
@@ -46,15 +53,23 @@ function initialState(): SearchState {
   return { calls: new Map(), messages: new Map(), finalized: false }
 }
 
-function structuredBlocks(content: readonly ContentBlock[]): {
+function structuredBlocks(content: readonly ContentBlock[], replayState?: unknown): {
   calls: ReadonlyMap<string, CodexWebSearchCallView>
   messages: ReadonlyMap<number, CodexResponseMessageBlock>
 } {
   const calls = new Map<string, CodexWebSearchCallView>()
   const messages = new Map<number, CodexResponseMessageBlock>()
-  content.forEach((block, index) => {
-    let structured: ReturnType<typeof structuredCodexBlock>
-    try { structured = structuredCodexBlock(block) } catch { return }
+  let replay: readonly CodexStructuredBlock[] = []
+  try { replay = structuredCodexReplayBlocks(replayState) } catch {}
+  const legacy = replay.length === 0
+    ? content.flatMap(block => {
+      try {
+        const structured = structuredCodexBlock(block)
+        return structured === undefined ? [] : [structured]
+      } catch { return [] }
+    })
+    : replay
+  legacy.forEach((structured, index) => {
     if (structured?.type === 'codex-web-search') {
       calls.set(structured.id, {
         key: structured.id,
@@ -66,6 +81,21 @@ function structuredBlocks(content: readonly ContentBlock[]): {
     }
   })
   return { calls, messages }
+}
+
+function updateStructured(state: SearchState, structured: CodexStructuredBlock, seq: number): SearchState {
+  if (structured.type === 'codex-web-search') {
+    const calls = new Map(state.calls)
+    calls.set(structured.id, {
+      key: structured.id,
+      status: structured.status,
+      ...structured.action === undefined ? {} : { action: structured.action },
+    })
+    return { ...state, calls, firstSeq: state.firstSeq ?? seq }
+  }
+  const messages = new Map(state.messages)
+  messages.set(seq, structured)
+  return { ...state, messages }
 }
 
 function updateChunk(state: SearchState, event: Extract<Parameters<ConversationNodeDefinition<SearchState>['match']>[0], { type: 'assistant/chunk' }>): SearchState {
@@ -86,26 +116,10 @@ function updateChunk(state: SearchState, event: Extract<Parameters<ConversationN
     return { ...state, finalized: false }
   }
   if (chunk.type !== 'block-end') return state
-  let structured: ReturnType<typeof structuredCodexBlock>
-  try { structured = structuredCodexBlock(chunk.block) } catch { return state }
-  if (structured?.type === 'codex-web-search') {
-    const calls = new Map(state.calls)
-    calls.set(structured.id, {
-      key: structured.id,
-      status: structured.status,
-      ...structured.action === undefined ? {} : { action: structured.action },
-    })
-    return {
-      ...state, calls,
-      firstSeq: state.firstSeq ?? event.seq,
-    }
-  }
-  if (structured?.type === 'codex-response-message') {
-    const messages = new Map(state.messages)
-    messages.set(chunk.index, structured)
-    return { ...state, messages }
-  }
-  return state
+  try {
+    const structured = structuredCodexBlock(chunk.block)
+    return structured === undefined ? state : updateStructured(state, structured, event.seq)
+  } catch { return state }
 }
 
 function locationClosed(location: ConversationLocation): boolean {
@@ -135,7 +149,9 @@ export const codexWebSearchDefinition: ConversationNodeDefinition<SearchState> =
   target: 'chat',
   match: event => {
     if (event.type === 'step/start') return { id: `${event.data.turn}:${event.data.step}`, role: 'start' }
-    if (event.type === 'assistant/chunk' || event.type === 'assistant/message') {
+    if (event.type === 'assistant/chunk'
+      || event.type === 'assistant/message'
+      || event.type === OPENAI_CODEX_STRUCTURED_EVENT) {
       return { id: `${event.data.turn}:${event.data.step}`, role: 'update' }
     }
     return null
@@ -143,8 +159,19 @@ export const codexWebSearchDefinition: ConversationNodeDefinition<SearchState> =
   start: () => initialState(),
   update: (context, match) => {
     if (match.event.type === 'assistant/chunk') return updateChunk(context.state, match.event)
+    if (match.event.type === OPENAI_CODEX_STRUCTURED_EVENT) {
+      try {
+        return updateStructured(
+          context.state,
+          parseCodexStructuredFrame(match.event.data.frame).block,
+          match.event.seq,
+        )
+      } catch { return context.state }
+    }
     if (match.event.type === 'assistant/message') {
-      const blocks = structuredBlocks(match.event.data.message.content)
+      const message = match.event.data.message
+      const replayState = message.source?.kind === 'model' ? message.source.replayState : undefined
+      const blocks = structuredBlocks(message.content, replayState)
       return {
         ...context.state,
         calls: blocks.calls,
@@ -156,7 +183,10 @@ export const codexWebSearchDefinition: ConversationNodeDefinition<SearchState> =
     }
     return context.state
   },
-  publication: match => match.event.type === 'assistant/chunk' ? 'animation-frame' : 'immediate',
+  publication: match => match.event.type === 'assistant/chunk'
+    || match.event.type === OPENAI_CODEX_STRUCTURED_EVENT
+    ? 'animation-frame'
+    : 'immediate',
   buildViewNode: (context): ChatConversationViewNode | null => {
     if (context.state === undefined || context.state.calls.size === 0) return null
     const location = context.start?.location ?? context.matches.at(-1)?.location ?? { kind: 'unresolved' }
